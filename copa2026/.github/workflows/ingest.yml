@@ -1,0 +1,72 @@
+name: ⚽ Copa 2026 — Ingestão de Dados
+
+on:
+  schedule:
+    # ── Fase de grupo: jogos de 11 jun a 2 jul (horário BRT = UTC-3)
+    # Durante o dia de jogo: a cada 5 min entre 11h e 23h UTC (8h-20h BRT)
+    - cron: '*/5 14-23 * * *'   # 11h–20h BRT em dias de jogo (ajuste conforme tabela)
+
+    # Fora de jogos: 1x por hora para manter dados frescos
+    - cron: '0 * * * *'
+
+  # Botão manual no GitHub — útil para testar e forçar atualização
+  workflow_dispatch:
+    inputs:
+      only:
+        description: 'Rodar só uma tarefa (deixe vazio para tudo)'
+        required: false
+        default: ''
+        type: choice
+        options:
+          - ''
+          - teams
+          - matches
+          - scorers
+
+jobs:
+  ingest:
+    name: Ingestão → Supabase
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: 📥 Checkout do repositório
+        uses: actions/checkout@v4
+
+      - name: 🐍 Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: 📦 Instalar dependências
+        run: pip install requests supabase python-dotenv
+
+      - name: ⚽ Rodar ingestão
+        run: |
+          if [ -n "${{ github.event.inputs.only }}" ]; then
+            python copa2026/ingest.py --only ${{ github.event.inputs.only }}
+          else
+            python copa2026/ingest.py
+          fi
+        env:
+          FOOTBALL_DATA_API_KEY: ${{ secrets.FOOTBALL_DATA_API_KEY }}
+          SUPABASE_URL:          ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY:  ${{ secrets.SUPABASE_SERVICE_KEY }}
+
+      - name: ✅ Confirmar execução
+        if: success()
+        run: echo "Ingestão concluída em $(date -u '+%Y-%m-%d %H:%M UTC')"
+
+      - name: ❌ Notificar falha (opcional — requer TELEGRAM_BOT_TOKEN)
+        if: failure()
+        run: |
+          if [ -n "$TELEGRAM_BOT_TOKEN" ]; then
+            curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+              -d chat_id="${TELEGRAM_CHAT_ID}" \
+              -d text="⚠️ *Copa 2026 Agent*: falha na ingestão em $(date -u '+%H:%M UTC')" \
+              -d parse_mode=Markdown
+          fi
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
