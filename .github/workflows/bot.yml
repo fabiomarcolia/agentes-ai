@@ -2,13 +2,8 @@ name: 🤖 Copa 2026 — Bot Telegram
 
 on:
   schedule:
-    # Jogos do dia: todo dia às 11h UTC (8h BRT)
     - cron: '0 11 * * *'
-
-    # Curiosidade: todo dia às 12h UTC (9h BRT)
     - cron: '0 12 * * *'
-
-    # Resumo pós-jogo: verifica a cada hora se tem jogo novo finalizado
     - cron: '0 * * * *'
 
   workflow_dispatch:
@@ -29,6 +24,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
 
+    env:
+      TELEGRAM_BOT_TOKEN:   ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHANNEL_ID:  ${{ secrets.TELEGRAM_CHANNEL_ID }}
+      SUPABASE_URL:         ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+      ANTHROPIC_API_KEY:    ${{ secrets.ANTHROPIC_API_KEY }}
+      GEMINI_API_KEY:       ${{ secrets.GEMINI_API_KEY }}
+      GROK_API_KEY:         ${{ secrets.GROK_API_KEY }}
+
     steps:
       - uses: actions/checkout@v4
 
@@ -42,33 +46,11 @@ jobs:
       - name: 📅 Jogos do dia (11h UTC)
         if: github.event.schedule == '0 11 * * *' || github.event.inputs.mode == 'jogos'
         run: python copa2026/broadcast.py jogos
-        env:
-          TELEGRAM_BOT_TOKEN:  ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
-          SUPABASE_URL:        ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
-          ANTHROPIC_API_KEY:   ${{ secrets.ANTHROPIC_API_KEY }}
-          GEMINI_API_KEY:      ${{ secrets.GEMINI_API_KEY }}
-          GROK_API_KEY:        ${{secrets.GROK_API_KEY}}
 
       - name: 💡 Curiosidade do dia (12h UTC)
         if: github.event.schedule == '0 12 * * *' || github.event.inputs.mode == 'curiosidade'
         run: python copa2026/broadcast.py curiosidade
-        env:
-          TELEGRAM_BOT_TOKEN:  ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
-          SUPABASE_URL:        ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
-          ANTHROPIC_API_KEY:   ${{ secrets.ANTHROPIC_API_KEY }}
-          GEMINI_API_KEY:      ${{ secrets.GEMINI_API_KEY }}
 
       - name: 📝 Resumo pós-jogo (a cada hora)
         if: github.event.schedule == '0 * * * *' || github.event.inputs.mode == 'resumo'
         run: python copa2026/broadcast.py resumo
-        env:
-          TELEGRAM_BOT_TOKEN:  ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
-          SUPABASE_URL:        ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
-          ANTHROPIC_API_KEY:   ${{ secrets.ANTHROPIC_API_KEY }}
-          GEMINI_API_KEY:      ${{ secrets.GEMINI_API_KEY }}
