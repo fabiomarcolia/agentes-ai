@@ -27,6 +27,7 @@ ANTHROPIC_KEY    = os.getenv("ANTHROPIC_API_KEY")
 GEMINI_KEY       = os.getenv("GEMINI_API_KEY")
 SUPABASE_URL     = os.getenv("SUPABASE_URL")
 SUPABASE_KEY     = os.getenv("SUPABASE_SERVICE_KEY")
+GROK_API_KEY:    = os.getenv("secrets.GROK_API_KEY")
 
 TELEGRAM_API     = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 BRT              = timezone(timedelta(hours=-3))
