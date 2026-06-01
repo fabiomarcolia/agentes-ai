@@ -17,13 +17,6 @@ from supabase import create_client
 
 load_dotenv(override=False)
 
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-CHANNEL_ID     = os.getenv("TELEGRAM_CHANNEL_ID", "-1001003879622443")
-ANTHROPIC_KEY  = os.getenv("ANTHROPIC_API_KEY")
-GEMINI_KEY     = os.getenv("GEMINI_API_KEY")
-SUPABASE_URL   = os.getenv("SUPABASE_URL")
-SUPABASE_KEY   = os.getenv("SUPABASE_SERVICE_KEY")
-
 BRT = timezone(timedelta(hours=-3))
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -31,11 +24,21 @@ log = logging.getLogger("copa2026-broadcast")
 
 
 def send(text: str):
-    requests.post(
-        f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-        json={"chat_id": CHANNEL_ID, "text": text, "parse_mode": "Markdown"},
+    token   = os.getenv("TELEGRAM_BOT_TOKEN")
+    channel = os.getenv("TELEGRAM_CHANNEL_ID", "-1001003879622443")
+
+    log.info(f"Enviando para canal: {channel}")
+    log.info(f"Token presente: {'sim' if token else 'NAO — variavel vazia!'}")
+
+    resp = requests.post(
+        f"https://api.telegram.org/bot{token}/sendMessage",
+        json={"chat_id": channel, "text": text, "parse_mode": "Markdown"},
         timeout=15,
     )
+    if resp.ok:
+        log.info("Mensagem enviada com sucesso!")
+    else:
+        log.error(f"Erro ao enviar: {resp.status_code} — {resp.text}")
 
 
 def gerar_texto_ia(prompt: str, modo: str = "resumo") -> str:
@@ -70,6 +73,8 @@ def gerar_texto_ia(prompt: str, modo: str = "resumo") -> str:
         )
         if resp.ok:
             return resp.json()["choices"][0]["message"]["content"]
+        else:
+            log.error(f"Erro Grok: {resp.status_code} — {resp.text}")
 
     # Gemini — fallback gratuito
     if os.getenv("GEMINI_API_KEY"):
@@ -80,6 +85,8 @@ def gerar_texto_ia(prompt: str, modo: str = "resumo") -> str:
         )
         if resp.ok:
             return resp.json()["candidates"][0]["content"]["parts"][0]["text"]
+        else:
+            log.error(f"Erro Gemini: {resp.status_code} — {resp.text}")
 
     # Claude como último recurso
     if os.getenv("ANTHROPIC_API_KEY"):
@@ -96,11 +103,11 @@ def gerar_texto_ia(prompt: str, modo: str = "resumo") -> str:
         if resp.ok:
             return resp.json()["content"][0]["text"]
 
-    return "IA indisponível no momento."
+    return "IA indisponivel no momento."
 
 
 def broadcast_jogos_do_dia():
-    sb = create_client(SUPABASE_URL, SUPABASE_KEY)
+    sb = create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_SERVICE_KEY"))
     hoje = datetime.now(BRT).date()
     inicio = datetime(hoje.year, hoje.month, hoje.day, 0, 0, tzinfo=BRT).isoformat()
     fim    = datetime(hoje.year, hoje.month, hoje.day, 23, 59, tzinfo=BRT).isoformat()
@@ -131,7 +138,7 @@ def broadcast_jogos_do_dia():
 
 
 def broadcast_curiosidade():
-    sb = create_client(SUPABASE_URL, SUPABASE_KEY)
+    sb = create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_SERVICE_KEY"))
     total_jogos = sb.table("matches").select("id", count="exact").eq("status", "FINISHED").execute()
     total_gols  = sb.table("goals").select("id", count="exact").execute()
 
@@ -150,7 +157,7 @@ Máximo 150 palavras. Em português. Sem markdown."""
 
 
 def broadcast_resumo_ultimo_jogo():
-    sb = create_client(SUPABASE_URL, SUPABASE_KEY)
+    sb = create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_SERVICE_KEY"))
 
     result = (
         sb.table("matches")
