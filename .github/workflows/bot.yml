@@ -49,6 +49,7 @@ jobs:
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
           ANTHROPIC_API_KEY:   ${{ secrets.ANTHROPIC_API_KEY }}
           GEMINI_API_KEY:      ${{ secrets.GEMINI_API_KEY }}
+          GROK_API_KEY:        ${{secrets.GROK_API_KEY}}
 
       - name: 💡 Curiosidade do dia (12h UTC)
         if: github.event.schedule == '0 12 * * *' || github.event.inputs.mode == 'curiosidade'
