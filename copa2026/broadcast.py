@@ -38,25 +38,63 @@ def send(text: str):
     )
 
 
-def gerar_texto_ia(prompt: str) -> str:
-    if ANTHROPIC_KEY:
+def gerar_texto_ia(prompt: str, modo: str = "resumo") -> str:
+    """
+    Claude → análises longas
+    Grok   → resumos e curiosidades (padrão)
+    Gemini → fallback gratuito
+    """
+
+    # Claude — análises longas
+    if os.getenv("ANTHROPIC_API_KEY") and modo == "analise":
         resp = requests.post(
             "https://api.anthropic.com/v1/messages",
-            headers={"x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json"},
+            headers={
+                "x-api-key":         os.getenv("ANTHROPIC_API_KEY"),
+                "anthropic-version": "2023-06-01",
+                "content-type":      "application/json",
+            },
             json={"model": "claude-sonnet-4-20250514", "max_tokens": 1000, "messages": [{"role": "user", "content": prompt}]},
             timeout=30,
         )
         if resp.ok:
             return resp.json()["content"][0]["text"]
 
-    if GEMINI_KEY:
+    # Grok — resumos e curiosidades
+    if os.getenv("GROK_API_KEY"):
         resp = requests.post(
-            f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_KEY}",
+            "https://api.x.ai/v1/chat/completions",
+            headers={"Authorization": f"Bearer {os.getenv('GROK_API_KEY')}", "Content-Type": "application/json"},
+            json={"model": "grok-3-mini", "max_tokens": 1000, "messages": [{"role": "user", "content": prompt}]},
+            timeout=30,
+        )
+        if resp.ok:
+            return resp.json()["choices"][0]["message"]["content"]
+
+    # Gemini — fallback gratuito
+    if os.getenv("GEMINI_API_KEY"):
+        resp = requests.post(
+            f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={os.getenv('GEMINI_API_KEY')}",
             json={"contents": [{"parts": [{"text": prompt}]}]},
             timeout=30,
         )
         if resp.ok:
             return resp.json()["candidates"][0]["content"]["parts"][0]["text"]
+
+    # Claude como último recurso
+    if os.getenv("ANTHROPIC_API_KEY"):
+        resp = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key":         os.getenv("ANTHROPIC_API_KEY"),
+                "anthropic-version": "2023-06-01",
+                "content-type":      "application/json",
+            },
+            json={"model": "claude-sonnet-4-20250514", "max_tokens": 1000, "messages": [{"role": "user", "content": prompt}]},
+            timeout=30,
+        )
+        if resp.ok:
+            return resp.json()["content"][0]["text"]
 
     return "IA indisponível no momento."
 
@@ -106,7 +144,7 @@ Dados atuais da Copa 2026: {jogos_count} jogos, {gols_count} gols, média de {me
 Gere UMA curiosidade interessante comparando com Copas anteriores ou destacando um padrão inusitado.
 Máximo 150 palavras. Em português. Sem markdown."""
 
-    curiosidade = gerar_texto_ia(prompt)
+    curiosidade = gerar_texto_ia(prompt, modo="resumo")
     send(f"💡 *Curiosidade do dia*\n\n{curiosidade}\n\n🤖 _Gerado por IA · Copa 2026 AI_")
     log.info("Curiosidade postada")
 
@@ -146,7 +184,7 @@ Intervalo: {j['home_score_ht']} x {j['away_score_ht']}
 Gols: {gols_str}
 Em português, com entusiasmo, sem markdown."""
 
-    resumo = gerar_texto_ia(prompt)
+    resumo = gerar_texto_ia(prompt, modo="resumo")
     data   = datetime.fromisoformat(j["utc_date"]).astimezone(BRT).strftime("%d/%m")
 
     send(

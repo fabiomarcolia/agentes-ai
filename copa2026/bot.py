@@ -64,11 +64,15 @@ def get_updates(offset: int = 0):
 
 
 # ── IA: gerar texto ───────────────────────────────────────────
-def gerar_texto_ia(prompt: str) -> str:
-    """Tenta Claude primeiro, cai no Gemini se não tiver chave."""
+def gerar_texto_ia(prompt: str, modo: str = "resumo") -> str:
+    """
+    Ordem de prioridade:
+    - análises longas → Claude
+    - resumos/curiosidades → Grok → Gemini (fallback)
+    """
 
-    # Claude
-    if ANTHROPIC_KEY:
+    # Claude — melhor para análises longas
+    if ANTHROPIC_KEY and modo == "analise":
         resp = requests.post(
             "https://api.anthropic.com/v1/messages",
             headers={
@@ -86,7 +90,25 @@ def gerar_texto_ia(prompt: str) -> str:
         if resp.ok:
             return resp.json()["content"][0]["text"]
 
-    # Gemini (fallback gratuito)
+    # Grok — melhor para resumos e curiosidades (treinado com dados do X)
+    if os.getenv("GROK_API_KEY"):
+        resp = requests.post(
+            "https://api.x.ai/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {os.getenv('GROK_API_KEY')}",
+                "Content-Type":  "application/json",
+            },
+            json={
+                "model":       "grok-3-mini",
+                "max_tokens":  1000,
+                "messages":    [{"role": "user", "content": prompt}],
+            },
+            timeout=30,
+        )
+        if resp.ok:
+            return resp.json()["choices"][0]["message"]["content"]
+
+    # Gemini — fallback gratuito
     if GEMINI_KEY:
         resp = requests.post(
             f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_KEY}",
@@ -95,6 +117,25 @@ def gerar_texto_ia(prompt: str) -> str:
         )
         if resp.ok:
             return resp.json()["candidates"][0]["content"]["parts"][0]["text"]
+
+    # Claude como último recurso
+    if ANTHROPIC_KEY:
+        resp = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key":         ANTHROPIC_KEY,
+                "anthropic-version": "2023-06-01",
+                "content-type":      "application/json",
+            },
+            json={
+                "model":      "claude-sonnet-4-20250514",
+                "max_tokens": 1000,
+                "messages":   [{"role": "user", "content": prompt}],
+            },
+            timeout=30,
+        )
+        if resp.ok:
+            return resp.json()["content"][0]["text"]
 
     return "⚠️ Serviço de IA temporariamente indisponível."
 
@@ -294,7 +335,7 @@ O resumo deve ser em português, com entusiasmo, destacar o resultado, mencionar
 Não use markdown, escreva em texto corrido."""
 
     send_message(chat_id, "⏳ Gerando resumo com IA...")
-    resumo = gerar_texto_ia(prompt)
+    resumo = gerar_texto_ia(prompt, modo="resumo")
 
     data = datetime.fromisoformat(j["utc_date"]).astimezone(BRT).strftime("%d/%m")
     msg = (
@@ -327,7 +368,7 @@ Gere UMA curiosidade interessante, surpreendente ou divertida sobre a Copa do Mu
 Seja criativo, use dados históricos se relevante. Máximo 150 palavras. Em português. Sem markdown."""
 
     send_message(chat_id, "⏳ Buscando curiosidade...")
-    curiosidade = gerar_texto_ia(prompt)
+    curiosidade = gerar_texto_ia(prompt, modo="resumo")
 
     msg = (
         f"💡 *Curiosidade do dia*\n\n"
