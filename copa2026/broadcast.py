@@ -43,13 +43,16 @@ def send(text: str):
 
 def gerar_texto_ia(prompt: str, modo: str = "resumo") -> str:
     """
-    Claude → análises longas
-    Grok   → resumos e curiosidades (padrão)
-    Gemini → fallback gratuito
+    Ordem de prioridade:
+    Claude  → análises longas
+    Groq    → resumos e curiosidades (free tier generoso)
+    Grok    → se tiver crédito
+    Gemini  → fallback
     """
-def gerar_texto_ia(prompt: str, modo: str = "resumo") -> str:
+
     log.info(f"GROK_API_KEY presente: {'sim' if os.getenv('GROK_API_KEY') else 'NAO'}")
     log.info(f"GEMINI_API_KEY presente: {'sim' if os.getenv('GEMINI_API_KEY') else 'NAO'}")
+    log.info(f"GROQ_API_KEY presente: {'sim' if os.getenv('GROQ_API_KEY') else 'NAO'}")
 
     # Claude — análises longas
     if os.getenv("ANTHROPIC_API_KEY") and modo == "analise":
@@ -66,7 +69,20 @@ def gerar_texto_ia(prompt: str, modo: str = "resumo") -> str:
         if resp.ok:
             return resp.json()["content"][0]["text"]
 
-    # Grok — resumos e curiosidades
+    # Groq — free tier generoso (14.400 req/dia), ultra-rápido
+    if os.getenv("GROQ_API_KEY"):
+        resp = requests.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={"Authorization": f"Bearer {os.getenv('GROQ_API_KEY')}", "Content-Type": "application/json"},
+            json={"model": "llama-3.3-70b-versatile", "max_tokens": 1000, "messages": [{"role": "user", "content": prompt}]},
+            timeout=30,
+        )
+        if resp.ok:
+            return resp.json()["choices"][0]["message"]["content"]
+        else:
+            log.error(f"Erro Groq: {resp.status_code} — {resp.text}")
+
+    # Grok — quando tiver crédito
     if os.getenv("GROK_API_KEY"):
         resp = requests.post(
             "https://api.x.ai/v1/chat/completions",
@@ -79,7 +95,7 @@ def gerar_texto_ia(prompt: str, modo: str = "resumo") -> str:
         else:
             log.error(f"Erro Grok: {resp.status_code} — {resp.text}")
 
-    # Gemini — fallback gratuito
+    # Gemini — fallback
     if os.getenv("GEMINI_API_KEY"):
         resp = requests.post(
             f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={os.getenv('GEMINI_API_KEY')}",
@@ -107,6 +123,7 @@ def gerar_texto_ia(prompt: str, modo: str = "resumo") -> str:
             return resp.json()["content"][0]["text"]
 
     return "IA indisponivel no momento."
+
 
 
 def broadcast_jogos_do_dia():
