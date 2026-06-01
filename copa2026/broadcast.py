@@ -47,6 +47,9 @@ def gerar_texto_ia(prompt: str, modo: str = "resumo") -> str:
     Grok   → resumos e curiosidades (padrão)
     Gemini → fallback gratuito
     """
+def gerar_texto_ia(prompt: str, modo: str = "resumo") -> str:
+    log.info(f"GROK_API_KEY presente: {'sim' if os.getenv('GROK_API_KEY') else 'NAO'}")
+    log.info(f"GEMINI_API_KEY presente: {'sim' if os.getenv('GEMINI_API_KEY') else 'NAO'}")
 
     # Claude — análises longas
     if os.getenv("ANTHROPIC_API_KEY") and modo == "analise":
