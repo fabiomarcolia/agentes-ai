@@ -168,8 +168,15 @@ def broadcast_curiosidade():
 
     prompt = f"""Você é um analista de dados esportivos especializado em Copa do Mundo.
 Dados atuais da Copa 2026: {jogos_count} jogos, {gols_count} gols, média de {media} gols/jogo.
+
 Gere UMA curiosidade interessante comparando com Copas anteriores ou destacando um padrão inusitado.
-Máximo 150 palavras. Em português. Sem markdown."""
+
+Regras de formatação:
+- Máximo 150 palavras
+- Em português
+- Divida em 2 ou 3 parágrafos curtos separados por linha em branco
+- Sem markdown, sem asteriscos, sem bullets
+- Comece direto com a curiosidade, sem introdução"""
 
     curiosidade = gerar_texto_ia(prompt, modo="resumo")
     send(f"💡 *Curiosidade do dia*\n\n{curiosidade}\n\n🤖 _Gerado por IA · Copa 2026 AI_")
