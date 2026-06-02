@@ -1,0 +1,68 @@
+name: 📱 Copa 2026 — Captura Redes Sociais
+
+on:
+  schedule:
+    # Captura completa 4x por dia
+    - cron: '0 9,13,17,21 * * *'
+
+    # Durante jogos: a cada hora
+    - cron: '0 * * * *'
+
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: 'Plataforma'
+        required: false
+        default: ''
+        type: choice
+        options:
+          - ''
+          - twitter
+          - instagram
+      analyze_only:
+        description: 'Só análise de sentimento (sem captura)'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
+
+jobs:
+  capture:
+    name: Captura → Supabase
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    env:
+      APIFY_API_TOKEN:      ${{ secrets.APIFY_API_TOKEN }}
+      SUPABASE_URL:         ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+      GROQ_API_KEY:         ${{ secrets.GROQ_API_KEY }}
+      GROK_API_KEY:         ${{ secrets.GROK_API_KEY }}
+      ANTHROPIC_API_KEY:    ${{ secrets.ANTHROPIC_API_KEY }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - run: pip install -r copa2026/requirements.txt
+
+      - name: 📱 Captura redes sociais
+        run: |
+          ARGS=""
+          if [ -n "${{ github.event.inputs.platform }}" ]; then
+            ARGS="--platform ${{ github.event.inputs.platform }}"
+          fi
+          if [ "${{ github.event.inputs.analyze_only }}" == "true" ]; then
+            ARGS="--analyze"
+          fi
+          python copa2026/social_capture.py $ARGS
+
+      - name: ✅ Concluído
+        if: success()
+        run: echo "Captura concluída em $(date -u '+%Y-%m-%d %H:%M UTC')"
