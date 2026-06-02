@@ -1,9 +1,12 @@
 """
 Copa 2026 AI — Postagem automática no canal
-Rodado pelo GitHub Actions:
-  - Todo dia às 8h BRT: jogos do dia
-  - Após cada rodada: resumo do jogo
-  - Todo dia às 9h BRT: curiosidade do dia
+Modos disponíveis:
+  - esquenta_curiosidade : curiosidade histórica de Copas anteriores (9h BRT)
+  - esquenta_previsao    : previsão/análise pré-Copa (13h BRT)
+  - esquenta_stat        : stat histórico do dia (18h BRT)
+  - jogos                : jogos do dia (durante a Copa)
+  - curiosidade          : curiosidade com dados reais (durante a Copa)
+  - resumo               : resumo pós-jogo gerado por IA
 """
 
 import os
@@ -17,19 +20,19 @@ from supabase import create_client
 
 load_dotenv(override=False)
 
-BRT = timezone(timedelta(hours=-3))
+BRT        = timezone(timedelta(hours=-3))
+COPA_START = datetime(2026, 6, 11, tzinfo=BRT).date()
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("copa2026-broadcast")
 
 
+# ── Telegram ──────────────────────────────────────────────────
 def send(text: str):
     token   = os.getenv("TELEGRAM_BOT_TOKEN")
-    channel = os.getenv("TELEGRAM_CHANNEL_ID", "-1001003879622443")
+    channel = os.getenv("TELEGRAM_CHANNEL_ID", "@copa2026ai")
 
     log.info(f"Enviando para canal: {channel}")
-    log.info(f"Token presente: {'sim' if token else 'NAO — variavel vazia!'}")
-
     resp = requests.post(
         f"https://api.telegram.org/bot{token}/sendMessage",
         json={"chat_id": channel, "text": text, "parse_mode": "Markdown"},
@@ -41,35 +44,24 @@ def send(text: str):
         log.error(f"Erro ao enviar: {resp.status_code} — {resp.text}")
 
 
+# ── IA ────────────────────────────────────────────────────────
 def gerar_texto_ia(prompt: str, modo: str = "resumo") -> str:
-    """
-    Ordem de prioridade:
-    Claude  → análises longas
-    Groq    → resumos e curiosidades (free tier generoso)
-    Grok    → se tiver crédito
-    Gemini  → fallback
-    """
-
+    log.info(f"GROQ_API_KEY presente: {'sim' if os.getenv('GROQ_API_KEY') else 'NAO'}")
     log.info(f"GROK_API_KEY presente: {'sim' if os.getenv('GROK_API_KEY') else 'NAO'}")
     log.info(f"GEMINI_API_KEY presente: {'sim' if os.getenv('GEMINI_API_KEY') else 'NAO'}")
-    log.info(f"GROQ_API_KEY presente: {'sim' if os.getenv('GROQ_API_KEY') else 'NAO'}")
 
     # Claude — análises longas
     if os.getenv("ANTHROPIC_API_KEY") and modo == "analise":
         resp = requests.post(
             "https://api.anthropic.com/v1/messages",
-            headers={
-                "x-api-key":         os.getenv("ANTHROPIC_API_KEY"),
-                "anthropic-version": "2023-06-01",
-                "content-type":      "application/json",
-            },
+            headers={"x-api-key": os.getenv("ANTHROPIC_API_KEY"), "anthropic-version": "2023-06-01", "content-type": "application/json"},
             json={"model": "claude-sonnet-4-20250514", "max_tokens": 1000, "messages": [{"role": "user", "content": prompt}]},
             timeout=30,
         )
         if resp.ok:
             return resp.json()["content"][0]["text"]
 
-    # Groq — free tier generoso (14.400 req/dia), ultra-rápido
+    # Groq — free tier, ultra-rápido
     if os.getenv("GROQ_API_KEY"):
         resp = requests.post(
             "https://api.groq.com/openai/v1/chat/completions",
@@ -107,15 +99,11 @@ def gerar_texto_ia(prompt: str, modo: str = "resumo") -> str:
         else:
             log.error(f"Erro Gemini: {resp.status_code} — {resp.text}")
 
-    # Claude como último recurso
+    # Claude último recurso
     if os.getenv("ANTHROPIC_API_KEY"):
         resp = requests.post(
             "https://api.anthropic.com/v1/messages",
-            headers={
-                "x-api-key":         os.getenv("ANTHROPIC_API_KEY"),
-                "anthropic-version": "2023-06-01",
-                "content-type":      "application/json",
-            },
+            headers={"x-api-key": os.getenv("ANTHROPIC_API_KEY"), "anthropic-version": "2023-06-01", "content-type": "application/json"},
             json={"model": "claude-sonnet-4-20250514", "max_tokens": 1000, "messages": [{"role": "user", "content": prompt}]},
             timeout=30,
         )
@@ -125,10 +113,107 @@ def gerar_texto_ia(prompt: str, modo: str = "resumo") -> str:
     return "IA indisponivel no momento."
 
 
+def formatar_paragrafos(texto: str) -> str:
+    """Garante quebras de parágrafo legíveis no Telegram."""
+    return texto.replace(". ", ".\n\n").strip()
 
+
+# ── ESQUENTA: Curiosidade histórica (9h BRT) ──────────────────
+def esquenta_curiosidade():
+    hoje      = datetime.now(BRT).date()
+    dias_para = (COPA_START - hoje).days
+
+    prompt = f"""Você é um narrador esportivo apaixonado por Copa do Mundo.
+Faltam {dias_para} dias para a Copa do Mundo 2026 começar.
+
+Gere UMA curiosidade surpreendente ou pouco conhecida sobre a história das Copas do Mundo.
+Pode ser sobre recordes, fatos inusitados, jogadores lendários, gols históricos ou momentos marcantes.
+
+Regras:
+- Máximo 150 palavras
+- Em português do Brasil
+- Tom animado e envolvente
+- 2 a 3 parágrafos curtos
+- Sem markdown, sem asteriscos, sem bullets
+- Comece direto com a curiosidade"""
+
+    texto = gerar_texto_ia(prompt)
+    texto = formatar_paragrafos(texto)
+    send(
+        f"🏆 *Esquenta Copa 2026 — Faltam {dias_para} dias!*\n\n"
+        f"{texto}\n\n"
+        f"🤖 _Gerado por IA · Copa 2026 AI_"
+    )
+    log.info("Esquenta curiosidade postada")
+
+
+# ── ESQUENTA: Previsão e análise (13h BRT) ───────────────────
+def esquenta_previsao():
+    hoje      = datetime.now(BRT).date()
+    dias_para = (COPA_START - hoje).days
+
+    prompt = f"""Você é um analista esportivo especializado em Copa do Mundo 2026.
+Faltam {dias_para} dias para a Copa do Mundo 2026 (EUA, México e Canadá).
+48 seleções participam pela primeira vez na história.
+
+Gere uma análise ou previsão interessante sobre a Copa 2026. Pode ser sobre:
+- Favoritos ao título e por quê
+- Seleções que podem surpreender (zebras)
+- Jogadores que podem se destacar
+- Como o formato com 48 times muda o torneio
+- Comparação com Copas anteriores
+
+Regras:
+- Máximo 180 palavras
+- Em português do Brasil
+- Tom analítico mas acessível
+- 2 a 3 parágrafos curtos
+- Sem markdown, sem asteriscos
+- Comece com uma afirmação forte"""
+
+    texto = gerar_texto_ia(prompt)
+    texto = formatar_paragrafos(texto)
+    send(
+        f"🔮 *Previsão Copa 2026 — Faltam {dias_para} dias!*\n\n"
+        f"{texto}\n\n"
+        f"🤖 _Gerado por IA · Copa 2026 AI_"
+    )
+    log.info("Esquenta previsão postada")
+
+
+# ── ESQUENTA: Stat histórico (18h BRT) ───────────────────────
+def esquenta_stat():
+    hoje      = datetime.now(BRT).date()
+    dias_para = (COPA_START - hoje).days
+
+    prompt = f"""Você é um analista de dados esportivos.
+Faltam {dias_para} dias para a Copa do Mundo 2026.
+
+Apresente UM número ou estatística histórica impressionante sobre Copas do Mundo.
+Exemplos do tipo de stat: artilheiro histórico, país com mais títulos, maior goleada, Copa com mais gols, etc.
+
+Regras:
+- Máximo 120 palavras
+- Em português do Brasil
+- Comece com o número/stat em destaque
+- Contextualize brevemente
+- 2 parágrafos curtos
+- Sem markdown, sem asteriscos"""
+
+    texto = gerar_texto_ia(prompt)
+    texto = formatar_paragrafos(texto)
+    send(
+        f"📊 *Stat do Dia — Copa 2026 em {dias_para} dias!*\n\n"
+        f"{texto}\n\n"
+        f"🤖 _Gerado por IA · Copa 2026 AI_"
+    )
+    log.info("Esquenta stat postada")
+
+
+# ── DURANTE A COPA ────────────────────────────────────────────
 def broadcast_jogos_do_dia():
-    sb = create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_SERVICE_KEY"))
-    hoje = datetime.now(BRT).date()
+    sb    = create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_SERVICE_KEY"))
+    hoje  = datetime.now(BRT).date()
     inicio = datetime(hoje.year, hoje.month, hoje.day, 0, 0, tzinfo=BRT).isoformat()
     fim    = datetime(hoje.year, hoje.month, hoje.day, 23, 59, tzinfo=BRT).isoformat()
 
@@ -148,8 +233,8 @@ def broadcast_jogos_do_dia():
 
     linhas = [f"⚽ *Jogos de hoje — {hoje.strftime('%d/%m')}*\n"]
     for j in jogos:
-        hora   = datetime.fromisoformat(j["utc_date"]).astimezone(BRT).strftime("%H:%M")
-        grupo  = f"Grupo {j['group_name']}" if j.get("group_name") else j.get("stage", "")
+        hora  = datetime.fromisoformat(j["utc_date"]).astimezone(BRT).strftime("%H:%M")
+        grupo = f"Grupo {j['group_name']}" if j.get("group_name") else j.get("stage", "")
         linhas.append(f"🕐 {hora}h — *{j['home_team_name']}* x *{j['away_team_name']}* — _{grupo}_")
 
     linhas.append("\n💬 Use @copa2026ai\\_bot para stats e resumos!")
@@ -158,34 +243,34 @@ def broadcast_jogos_do_dia():
 
 
 def broadcast_curiosidade():
-    sb = create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_SERVICE_KEY"))
+    sb          = create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_SERVICE_KEY"))
     total_jogos = sb.table("matches").select("id", count="exact").eq("status", "FINISHED").execute()
     total_gols  = sb.table("goals").select("id", count="exact").execute()
 
     jogos_count = total_jogos.count or 0
     gols_count  = total_gols.count or 0
-    media = round(gols_count / jogos_count, 2) if jogos_count > 0 else 0
+    media       = round(gols_count / jogos_count, 2) if jogos_count > 0 else 0
 
     prompt = f"""Você é um analista de dados esportivos especializado em Copa do Mundo.
 Dados atuais da Copa 2026: {jogos_count} jogos, {gols_count} gols, média de {media} gols/jogo.
 
 Gere UMA curiosidade interessante comparando com Copas anteriores ou destacando um padrão inusitado.
 
-Regras de formatação:
+Regras:
 - Máximo 150 palavras
-- Em português
-- Divida em 2 ou 3 parágrafos curtos separados por linha em branco
-- Sem markdown, sem asteriscos, sem bullets
-- Comece direto com a curiosidade, sem introdução"""
+- Em português do Brasil
+- 2 a 3 parágrafos curtos
+- Sem markdown, sem asteriscos
+- Comece direto com a curiosidade"""
 
-    curiosidade = gerar_texto_ia(prompt, modo="resumo")
-    send(f"💡 *Curiosidade do dia*\n\n{curiosidade}\n\n🤖 _Gerado por IA · Copa 2026 AI_")
+    texto = gerar_texto_ia(prompt)
+    texto = formatar_paragrafos(texto)
+    send(f"💡 *Curiosidade do dia*\n\n{texto}\n\n🤖 _Gerado por IA · Copa 2026 AI_")
     log.info("Curiosidade postada")
 
 
 def broadcast_resumo_ultimo_jogo():
-    sb = create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_SERVICE_KEY"))
-
+    sb     = create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_SERVICE_KEY"))
     result = (
         sb.table("matches")
         .select("*")
@@ -199,8 +284,7 @@ def broadcast_resumo_ultimo_jogo():
         log.info("Nenhum jogo finalizado para resumir.")
         return
 
-    j = result.data[0]
-
+    j           = result.data[0]
     gols_result = (
         sb.table("goals")
         .select("scorer_name, team_name, minute, type")
@@ -208,7 +292,7 @@ def broadcast_resumo_ultimo_jogo():
         .order("minute")
         .execute()
     )
-    gols = gols_result.data or []
+    gols     = gols_result.data or []
     gols_str = "\n".join([f"  ⚽ {g['scorer_name']} ({g['team_name']}) {g['minute']}'" for g in gols]) or "  Sem dados"
 
     prompt = f"""Você é um narrador esportivo brasileiro animado.
@@ -216,9 +300,10 @@ Resuma em até 200 palavras o jogo da Copa 2026:
 {j['home_team_name']} {j['home_score']} x {j['away_score']} {j['away_team_name']}
 Intervalo: {j['home_score_ht']} x {j['away_score_ht']}
 Gols: {gols_str}
-Em português, com entusiasmo, sem markdown."""
+Em português, com entusiasmo. 2 a 3 parágrafos. Sem markdown."""
 
-    resumo = gerar_texto_ia(prompt, modo="resumo")
+    resumo = gerar_texto_ia(prompt)
+    resumo = formatar_paragrafos(resumo)
     data   = datetime.fromisoformat(j["utc_date"]).astimezone(BRT).strftime("%d/%m")
 
     send(
@@ -230,14 +315,20 @@ Em português, com entusiasmo, sem markdown."""
     log.info("Resumo pós-jogo postado")
 
 
-if __name__ == "__main__":
-    mode = sys.argv[1] if len(sys.argv) > 1 else "jogos"
+# ── Main ──────────────────────────────────────────────────────
+MODOS = {
+    "esquenta_curiosidade": esquenta_curiosidade,
+    "esquenta_previsao":    esquenta_previsao,
+    "esquenta_stat":        esquenta_stat,
+    "jogos":                broadcast_jogos_do_dia,
+    "curiosidade":          broadcast_curiosidade,
+    "resumo":               broadcast_resumo_ultimo_jogo,
+}
 
-    if mode == "jogos":
-        broadcast_jogos_do_dia()
-    elif mode == "curiosidade":
-        broadcast_curiosidade()
-    elif mode == "resumo":
-        broadcast_resumo_ultimo_jogo()
+if __name__ == "__main__":
+    mode = sys.argv[1] if len(sys.argv) > 1 else ""
+
+    if mode in MODOS:
+        MODOS[mode]()
     else:
-        log.error(f"Modo inválido: {mode}. Use: jogos | curiosidade | resumo")
+        log.error(f"Modo inválido: '{mode}'. Use: {' | '.join(MODOS.keys())}")

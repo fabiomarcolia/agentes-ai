@@ -2,8 +2,18 @@ name: 🤖 Copa 2026 — Bot Telegram
 
 on:
   schedule:
-    - cron: '0 11 * * *'
+    # ── PRÉ-COPA (até 11/06): esquenta 3x por dia ─────────────
+    # 9h BRT = 12h UTC → curiosidade histórica
     - cron: '0 12 * * *'
+    # 13h BRT = 16h UTC → previsão/análise
+    - cron: '0 16 * * *'
+    # 18h BRT = 21h UTC → stat histórico
+    - cron: '0 21 * * *'
+
+    # ── DURANTE A COPA ────────────────────────────────────────
+    # 8h BRT = 11h UTC → jogos do dia
+    - cron: '0 11 * * *'
+    # Resumo pós-jogo: a cada hora
     - cron: '0 * * * *'
 
   workflow_dispatch:
@@ -11,9 +21,12 @@ on:
       mode:
         description: 'O que postar'
         required: true
-        default: 'jogos'
+        default: 'esquenta_curiosidade'
         type: choice
         options:
+          - esquenta_curiosidade
+          - esquenta_previsao
+          - esquenta_stat
           - jogos
           - curiosidade
           - resumo
@@ -44,14 +57,28 @@ jobs:
 
       - run: pip install -r copa2026/requirements.txt
 
-      - name: 📅 Jogos do dia (11h UTC)
+      # ── PRÉ-COPA ──────────────────────────────────────────
+      - name: 🏆 Curiosidade histórica (12h UTC / 9h BRT)
+        if: github.event.schedule == '0 12 * * *' || github.event.inputs.mode == 'esquenta_curiosidade'
+        run: python copa2026/broadcast.py esquenta_curiosidade
+
+      - name: 🔮 Previsão do dia (16h UTC / 13h BRT)
+        if: github.event.schedule == '0 16 * * *' || github.event.inputs.mode == 'esquenta_previsao'
+        run: python copa2026/broadcast.py esquenta_previsao
+
+      - name: 📊 Stat histórico (21h UTC / 18h BRT)
+        if: github.event.schedule == '0 21 * * *' || github.event.inputs.mode == 'esquenta_stat'
+        run: python copa2026/broadcast.py esquenta_stat
+
+      # ── DURANTE A COPA ─────────────────────────────────────
+      - name: ⚽ Jogos do dia (11h UTC / 8h BRT)
         if: github.event.schedule == '0 11 * * *' || github.event.inputs.mode == 'jogos'
         run: python copa2026/broadcast.py jogos
-
-      - name: 💡 Curiosidade do dia (12h UTC)
-        if: github.event.schedule == '0 12 * * *' || github.event.inputs.mode == 'curiosidade'
-        run: python copa2026/broadcast.py curiosidade
 
       - name: 📝 Resumo pós-jogo (a cada hora)
         if: github.event.schedule == '0 * * * *' || github.event.inputs.mode == 'resumo'
         run: python copa2026/broadcast.py resumo
+
+      - name: 💡 Curiosidade com dados reais
+        if: github.event.inputs.mode == 'curiosidade'
+        run: python copa2026/broadcast.py curiosidade
