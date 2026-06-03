@@ -1,0 +1,60 @@
+name: 🤖 Copa 2026 — Agente LangGraph
+
+on:
+  schedule:
+    # Pré-jogo: 6h antes dos jogos (horários aproximados)
+    - cron: '0 15 * * *'   # 12h UTC = 9h BRT
+
+    # Pós-jogo: verifica a cada hora se tem jogo novo finalizado
+    - cron: '0 * * * *'
+
+    # Resumo diário: todo dia às 23h BRT
+    - cron: '0 2 * * *'    # 2h UTC = 23h BRT
+
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Modo do agente'
+        required: true
+        default: 'diario'
+        type: choice
+        options:
+          - pos_jogo
+          - pre_jogo
+          - diario
+
+jobs:
+  agent:
+    name: Agente → Telegram
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    env:
+      SUPABASE_URL:         ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+      GROQ_API_KEY:         ${{ secrets.GROQ_API_KEY }}
+      GETXAPI_KEY:          ${{ secrets.GETXAPI_KEY }}
+      TELEGRAM_BOT_TOKEN:   ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHANNEL_ID:  ${{ secrets.TELEGRAM_CHANNEL_ID }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - run: pip install -r copa2026/requirements.txt
+
+      - name: 🤖 Pré-jogo (15h UTC)
+        if: github.event.schedule == '0 15 * * *' || github.event.inputs.mode == 'pre_jogo'
+        run: python copa2026/agent.py --mode pre_jogo
+
+      - name: 🏆 Pós-jogo (a cada hora)
+        if: github.event.schedule == '0 * * * *' || github.event.inputs.mode == 'pos_jogo'
+        run: python copa2026/agent.py --mode pos_jogo
+
+      - name: 📋 Resumo diário (2h UTC)
+        if: github.event.schedule == '0 2 * * *' || github.event.inputs.mode == 'diario'
+        run: python copa2026/agent.py --mode diario
