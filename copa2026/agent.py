@@ -215,13 +215,19 @@ def buscar_artilharia(limite: int = 5) -> str:
 
 
 @tool
-def postar_telegram(mensagem: str) -> str:
-    """Posta uma mensagem no canal do Telegram."""
+def postar_telegram(text: str) -> str:
+    """Posta uma mensagem no canal do Telegram. Use este parâmetro: text (string com a mensagem completa)."""
+    token = os.getenv("TELEGRAM_BOT_TOKEN")
+    chat  = os.getenv("TELEGRAM_CHANNEL_ID", "@copa2026ai")
+
+    if not token:
+        return "TELEGRAM_BOT_TOKEN não configurado — mensagem não enviada."
+
     resp = requests.post(
-        f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+        f"https://api.telegram.org/bot{token}/sendMessage",
         json={
-            "chat_id":    TELEGRAM_CHAT,
-            "text":       mensagem,
+            "chat_id":    chat,
+            "text":       text,
             "parse_mode": "Markdown",
         },
         timeout=15,
@@ -231,7 +237,7 @@ def postar_telegram(mensagem: str) -> str:
         return "Mensagem postada com sucesso no canal."
     else:
         log.error(f"Erro Telegram: {resp.text}")
-        return f"Erro ao postar: {resp.status_code}"
+        return f"Erro ao postar: {resp.status_code} — {resp.text[:100]}"
 
 
 # ══════════════════════════════════════════════════════════════
@@ -344,7 +350,7 @@ Seja autônomo e decisivo.""",
     grafo.add_conditional_edges("agente", deve_continuar)
     grafo.add_edge("tools", "agente")
 
-    return grafo.compile()
+    return grafo.compile(checkpointer=None)
 
 
 # ══════════════════════════════════════════════════════════════
@@ -364,11 +370,14 @@ def run(modo: str):
 
     input_msg = mensagens_iniciais.get(modo, mensagens_iniciais["diario"])
 
-    resultado = agente.invoke({
-        "messages": [HumanMessage(content=input_msg)],
-        "modo":     modo,
-        "log_acoes": [],
-    })
+    resultado = agente.invoke(
+        {
+            "messages":   [HumanMessage(content=input_msg)],
+            "modo":       modo,
+            "log_acoes":  [],
+        },
+        config={"recursion_limit": 15}
+    )
 
     ultima_msg = resultado["messages"][-1]
     log.info(f"Agente finalizou. Última mensagem: {ultima_msg.content[:200]}")
