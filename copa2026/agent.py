@@ -145,10 +145,17 @@ def buscar_sentimento_times(times: str) -> str:
         result = (
             sb.table("team_sentiment")
             .select("*")
-            .ilike("team_name", f"%{time}%")
+            .eq("team_name", time)
+            .eq("platform", "twitter")
+            .eq("period", "general")
             .limit(1)
             .execute()
         )
+        # Se não achar exato, tenta parcial via python
+        if not result.data:
+            all_result = sb.table("team_sentiment").select("*").execute()
+            result_data = [r for r in (all_result.data or []) if time.lower() in r["team_name"].lower()]
+            result = type("R", (), {"data": result_data[:1]})()
         if result.data:
             r = result.data[0]
             total = r["total_posts"] or 1
@@ -169,7 +176,7 @@ def buscar_tweets_recentes(termo: str, limite: int = 10) -> str:
     """Busca os tweets mais recentes sobre um termo ou time."""
     result = (
         sb.table("social_posts")
-        .select("content, likes, shares, sentiment_analysis(sentiment, score)")
+        .select("content, likes, shares")
         .ilike("content", f"%{termo}%")
         .order("captured_at", desc=True)
         .limit(limite)
@@ -181,13 +188,7 @@ def buscar_tweets_recentes(termo: str, limite: int = 10) -> str:
 
     tweets = []
     for p in result.data:
-        sent = ""
-        if p.get("sentiment_analysis"):
-            s = p["sentiment_analysis"]
-            if isinstance(s, list) and s:
-                s = s[0]
-            sent = f" [{s.get('sentiment', '')}]"
-        tweets.append(f"- {p['content'][:120]}...{sent} (❤️{p['likes']})")
+        tweets.append(f"- {p['content'][:120]}... (❤️{p.get('likes', 0)})")
 
     return "\n".join(tweets)
 
