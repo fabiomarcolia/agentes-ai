@@ -2,9 +2,7 @@ name: 📱 Copa 2026 — Captura X/Twitter
 
 on:
   schedule:
-    # 4x por dia em horários fixos
     - cron: '0 9,13,17,21 * * *'
-    # A cada hora durante jogos (11 jun em diante)
     - cron: '0 * * * *'
 
   workflow_dispatch:
@@ -25,7 +23,7 @@ jobs:
     timeout-minutes: 15
 
     env:
-      TWITTER_BEARER_TOKEN: ${{ secrets.TWITTER_BEARER_TOKEN }}
+      GETXAPI_KEY:          ${{ secrets.GETXAPI_KEY }}
       SUPABASE_URL:         ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
       GROQ_API_KEY:         ${{ secrets.GROQ_API_KEY }}
