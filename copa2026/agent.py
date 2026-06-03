@@ -216,12 +216,12 @@ def buscar_artilharia(limite: int = 5) -> str:
 
 @tool
 def postar_telegram(text: str) -> str:
-    """Posta uma mensagem no canal do Telegram. Use este parâmetro: text (string com a mensagem completa)."""
+    """Posta uma mensagem no canal do Telegram. Use este parâmetro: text (string com a mensagem completa). Chame esta função APENAS UMA VEZ e depois encerre."""
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     chat  = os.getenv("TELEGRAM_CHANNEL_ID", "@copa2026ai")
 
     if not token:
-        return "TELEGRAM_BOT_TOKEN não configurado — mensagem não enviada."
+        return "TELEGRAM_BOT_TOKEN não configurado — mensagem não enviada. ENCERRE AGORA."
 
     resp = requests.post(
         f"https://api.telegram.org/bot{token}/sendMessage",
@@ -234,10 +234,10 @@ def postar_telegram(text: str) -> str:
     )
     if resp.ok:
         log.info("Mensagem postada no Telegram!")
-        return "Mensagem postada com sucesso no canal."
+        return "SUCESSO: Mensagem postada no canal. TAREFA CONCLUÍDA. Não chame mais nenhuma ferramenta."
     else:
         log.error(f"Erro Telegram: {resp.text}")
-        return f"Erro ao postar: {resp.status_code} — {resp.text[:100]}"
+        return f"ERRO ao postar: {resp.status_code}. ENCERRE AGORA sem tentar novamente."
 
 
 # ══════════════════════════════════════════════════════════════
@@ -342,6 +342,14 @@ Regras importantes:
 
     def deve_continuar(state: AgentState):
         ultima = state["messages"][-1]
+
+        # Verifica se já postou com sucesso — para o loop
+        for msg in reversed(state["messages"]):
+            if hasattr(msg, "content") and isinstance(msg.content, str):
+                if "TAREFA CONCLUÍDA" in msg.content:
+                    log.info("Agente concluiu após postar.")
+                    return END
+
         if hasattr(ultima, "tool_calls") and ultima.tool_calls:
             log.info(f"Agente usando tool: {[t['name'] for t in ultima.tool_calls]}")
             return "tools"
