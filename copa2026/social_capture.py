@@ -1,6 +1,6 @@
 """
-Copa 2026 AI — Captura X/Twitter via API v2
-Usa Bearer Token direto — sem Apify
+Copa 2026 AI — Captura X/Twitter via GetXAPI
+$0.001 por chamada (~20 tweets) — $0.10 grátis no cadastro
 Destino: Supabase
 
 Uso:
@@ -14,7 +14,7 @@ import time
 import json
 import argparse
 import logging
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from typing import Optional
 
 import requests
@@ -30,15 +30,15 @@ logging.basicConfig(
 log = logging.getLogger("copa2026-social")
 
 # ── Config ────────────────────────────────────────────────────
-TWITTER_BEARER = os.getenv("TWITTER_BEARER_TOKEN")
-SUPABASE_URL   = os.getenv("SUPABASE_URL")
-SUPABASE_KEY   = os.getenv("SUPABASE_SERVICE_KEY")
-GROQ_KEY       = os.getenv("GROQ_API_KEY")
-GROK_KEY       = os.getenv("GROK_API_KEY")
+GETXAPI_KEY  = os.getenv("GETXAPI_KEY")
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
+GROQ_KEY     = os.getenv("GROQ_API_KEY")
+GROK_KEY     = os.getenv("GROK_API_KEY")
 
-TWITTER_BASE   = "https://api.twitter.com/2"
+GETXAPI_BASE = "https://api.getxapi.com"
 
-# Termos de busca — mistura hashtags e termos livres
+# Termos de busca
 SEARCH_TERMS = [
     "#Copa2026",
     "#WorldCup2026",
@@ -47,27 +47,16 @@ SEARCH_TERMS = [
     "#FIFAWorldCup",
 ]
 
-# Termos por seleção (adicionados durante os jogos)
-TEAM_TERMS = [
-    ("#BRA OR #Brasil OR Brazil 2026", "Brazil"),
-    ("#ARG OR Argentina 2026",         "Argentina"),
-    ("#FRA OR France 2026",            "France"),
-    ("#ENG OR England 2026",           "England"),
-    ("#GER OR Germany 2026",           "Germany"),
-    ("#ESP OR Spain 2026",             "Spain"),
-    ("#POR OR Portugal 2026",          "Portugal"),
-]
-
-# Seleções para detectar no texto
+# Palavras-chave por seleção
 TEAM_KEYWORDS = {
-    "Brazil":      ["brazil", "brasil", "seleção", "canarinho", "#bra", "brasileira", "neymar", "vinicius"],
+    "Brazil":      ["brazil", "brasil", "seleção", "canarinho", "#bra", "brasileira", "vinicius", "endrick"],
     "Argentina":   ["argentina", "albiceleste", "#arg", "messi", "scaloni"],
-    "France":      ["france", "frança", "les bleus", "#fra", "mbappé", "mbappe", "deschamps"],
+    "France":      ["france", "frança", "les bleus", "#fra", "mbappé", "mbappe"],
     "England":     ["england", "inglaterra", "three lions", "#eng", "kane"],
-    "Germany":     ["germany", "alemanha", "mannschaft", "#ger", "#deu"],
-    "Spain":       ["spain", "espanha", "la roja", "#esp", "morata"],
-    "Portugal":    ["portugal", "#por", "ronaldo", "cr7", "martínez"],
-    "Netherlands": ["netherlands", "holanda", "oranje", "#ned", "#nld"],
+    "Germany":     ["germany", "alemanha", "mannschaft", "#ger"],
+    "Spain":       ["spain", "espanha", "la roja", "#esp"],
+    "Portugal":    ["portugal", "#por", "ronaldo", "cr7"],
+    "Netherlands": ["netherlands", "holanda", "oranje", "#ned"],
     "Uruguay":     ["uruguay", "uruguai", "celeste", "#uru"],
 }
 
@@ -77,94 +66,86 @@ def get_supabase():
     return create_client(SUPABASE_URL, SUPABASE_KEY)
 
 
-# ── Twitter API v2 ────────────────────────────────────────────
-def twitter_search(query: str, max_results: int = 50) -> list:
-    """Busca tweets recentes via API v2."""
-    headers = {"Authorization": f"Bearer {TWITTER_BEARER}"}
+# ── GetXAPI ───────────────────────────────────────────────────
+def getxapi_search(query: str, max_pages: int = 2) -> list:
+    """
+    Busca tweets via GetXAPI advanced_search.
+    $0.001 por chamada, ~20 tweets por página.
+    """
+    headers = {"Authorization": f"Bearer {GETXAPI_KEY}"}
+    tweets  = []
+    cursor  = None
 
-    params = {
-        "query":       f"{query} -is:retweet lang:pt OR lang:en OR lang:es",
-        "max_results": min(max_results, 100),
-        "tweet.fields": "created_at,public_metrics,lang,entities",
-        "user.fields":  "username,id",
-        "expansions":   "author_id",
-    }
+    for page in range(max_pages):
+        params = {
+            "q":       f"{query} -filter:retweets",
+            "product": "Latest",
+        }
+        if cursor:
+            params["cursor"] = cursor
 
-    resp = requests.get(
-        f"{TWITTER_BASE}/tweets/search/recent",
-        headers=headers,
-        params=params,
-        timeout=20,
-    )
+        resp = requests.get(
+            f"{GETXAPI_BASE}/twitter/tweet/advanced_search",
+            headers=headers,
+            params=params,
+            timeout=20,
+        )
 
-    if resp.status_code == 429:
-        log.warning("Rate limit atingido — aguardando 15 segundos")
-        time.sleep(15)
-        return []
+        if not resp.ok:
+            log.error(f"Erro GetXAPI: {resp.status_code} — {resp.text[:200]}")
+            break
 
-    if not resp.ok:
-        log.error(f"Erro Twitter API: {resp.status_code} — {resp.text[:200]}")
-        return []
+        data     = resp.json()
+        batch    = data.get("tweets", [])
+        tweets.extend(batch)
+        log.info(f"Página {page+1} — {len(batch)} tweets para '{query[:40]}'")
 
-    data = resp.json()
+        if not data.get("has_more") or not batch:
+            break
 
-    if "errors" in data and not data.get("data"):
-        log.warning(f"Twitter API retornou erro: {data['errors']}")
-        return []
+        cursor = data.get("next_cursor")
+        time.sleep(0.5)
 
-    tweets    = data.get("data", [])
-    users_map = {}
-
-    # Mapeia users pelo ID
-    for u in data.get("includes", {}).get("users", []):
-        users_map[u["id"]] = u.get("username", "")
-
-    log.info(f"Tweets retornados para '{query[:40]}': {len(tweets)}")
-    return tweets, users_map
+    return tweets
 
 
-def capture_twitter(search_terms: list, max_per_term: int = 30) -> list:
-    """Captura tweets para cada termo de busca."""
-    if not TWITTER_BEARER:
-        raise ValueError("TWITTER_BEARER_TOKEN não definido no .env")
+def capture_twitter(search_terms: list, pages_per_term: int = 2) -> list:
+    if not GETXAPI_KEY:
+        raise ValueError("GETXAPI_KEY não definido no .env")
 
     all_posts = []
 
     for term in search_terms:
-        result = twitter_search(term, max_results=max_per_term)
-        if not result:
-            continue
-
-        tweets, users_map = result
+        tweets = getxapi_search(term, max_pages=pages_per_term)
 
         for t in tweets:
-            metrics = t.get("public_metrics", {})
-            entities = t.get("entities", {})
-            hashtags = [h["tag"].lower() for h in entities.get("hashtags", [])]
+            author   = t.get("author", {})
+            hashtags = [h.lower() for h in t.get("hashtags", [])]
 
             post = {
                 "platform":       "twitter",
-                "post_id":        t["id"],
-                "author":         users_map.get(t.get("author_id"), ""),
-                "author_id":      t.get("author_id", ""),
-                "content":        t.get("text", ""),
-                "url":            f"https://x.com/i/web/status/{t['id']}",
-                "likes":          metrics.get("like_count", 0),
-                "comments":       metrics.get("reply_count", 0),
-                "shares":         metrics.get("retweet_count", 0),
-                "views":          metrics.get("impression_count", 0),
+                "post_id":        str(t.get("id", t.get("tweet_id", ""))),
+                "author":         author.get("userName", author.get("name", "")),
+                "author_id":      str(author.get("id", "")),
+                "content":        t.get("text", t.get("full_text", "")),
+                "url":            t.get("url", f"https://x.com/i/web/status/{t.get('id','')}"),
+                "likes":          t.get("likeCount", t.get("favorite_count", 0)) or 0,
+                "comments":       t.get("replyCount", t.get("reply_count", 0)) or 0,
+                "shares":         t.get("retweetCount", t.get("retweet_count", 0)) or 0,
+                "views":          t.get("viewCount", t.get("views", 0)) or 0,
                 "hashtags":       hashtags,
                 "search_term":    term,
                 "language":       t.get("lang", ""),
-                "posted_at":      t.get("created_at"),
-                "team_mentioned": detect_team(t.get("text", "")),
+                "posted_at":      t.get("createdAt", t.get("created_at")),
+                "team_mentioned": detect_team(t.get("text", t.get("full_text", ""))),
             }
-            all_posts.append(post)
 
-        # Respeita rate limit entre termos
-        time.sleep(2)
+            if post["post_id"]:
+                all_posts.append(post)
 
-    log.info(f"Total de posts capturados: {len(all_posts)}")
+        time.sleep(1)
+
+    log.info(f"Total capturado: {len(all_posts)} posts")
     return all_posts
 
 
@@ -179,7 +160,7 @@ def detect_team(text: str) -> Optional[str]:
     return None
 
 
-# ── Análise de sentimento ─────────────────────────────────────
+# ── IA: análise de sentimento ─────────────────────────────────
 def call_ai(prompt: str) -> str:
     if GROQ_KEY:
         resp = requests.post(
@@ -206,8 +187,7 @@ def call_ai(prompt: str) -> str:
 
 
 def analyze_sentiment_batch(posts: list) -> list:
-    """Analisa sentimento de até 10 posts por vez."""
-    results = []
+    results    = []
     batch_size = 10
 
     for i in range(0, len(posts), batch_size):
@@ -221,7 +201,7 @@ def analyze_sentiment_batch(posts: list) -> list:
 
 {texts}
 
-Retorne APENAS um JSON válido (sem texto adicional, sem markdown):
+Retorne APENAS JSON válido (sem texto extra, sem markdown):
 [
   {{
     "index": 1,
@@ -235,11 +215,11 @@ Retorne APENAS um JSON válido (sem texto adicional, sem markdown):
 
 score: -1.0 (muito negativo) a 1.0 (muito positivo).
 is_prediction: true se o post prevê resultado de jogo.
-predicted_winner: time que o post aponta como vencedor (ou null)."""
+predicted_winner: time apontado como vencedor (ou null)."""
 
         try:
-            resp_text = call_ai(prompt)
-            json_match = re.search(r'\[.*?\]', resp_text, re.DOTALL)
+            resp_text   = call_ai(prompt)
+            json_match  = re.search(r'\[.*?\]', resp_text, re.DOTALL)
             if json_match:
                 batch_results = json.loads(json_match.group())
                 for r in batch_results:
@@ -263,7 +243,7 @@ predicted_winner: time que o post aponta como vencedor (ou null)."""
     return results
 
 
-# ── Salvar no Supabase ────────────────────────────────────────
+# ── Supabase: salvar ──────────────────────────────────────────
 def save_posts(sb, posts: list) -> int:
     if not posts:
         return 0
@@ -283,6 +263,7 @@ def save_sentiment(sb, analyses: list) -> int:
 
 def update_team_sentiment(sb):
     from collections import defaultdict
+
     result = sb.table("sentiment_analysis").select(
         "team_mentioned, sentiment, score"
     ).not_.is_("team_mentioned", "null").execute()
@@ -290,18 +271,18 @@ def update_team_sentiment(sb):
     if not result.data:
         return
 
+    TEAM_TLA = {
+        "Brazil": "BRA", "Argentina": "ARG", "France": "FRA",
+        "England": "ENG", "Germany": "GER", "Spain": "ESP",
+        "Portugal": "POR", "Netherlands": "NED", "Uruguay": "URU",
+    }
+
     teams = defaultdict(lambda: {"positive": 0, "negative": 0, "neutral": 0, "scores": []})
     for row in result.data:
         team = row["team_mentioned"]
         teams[team][row["sentiment"]] += 1
         if row["score"] is not None:
             teams[team]["scores"].append(float(row["score"]))
-
-    TEAM_TLA = {t[0]: t[1] for t in [
-        ("Brazil","BRA"),("Argentina","ARG"),("France","FRA"),
-        ("England","ENG"),("Germany","GER"),("Spain","ESP"),
-        ("Portugal","POR"),("Netherlands","NED"),("Uruguay","URU"),
-    ]}
 
     for team_name, data in teams.items():
         total = data["positive"] + data["negative"] + data["neutral"]
@@ -330,13 +311,11 @@ def run(analyze_only: bool = False):
     all_posts = []
 
     if not analyze_only:
-        all_posts = capture_twitter(SEARCH_TERMS, max_per_term=30)
+        all_posts = capture_twitter(SEARCH_TERMS, pages_per_term=2)
         if all_posts:
             save_posts(sb, all_posts)
 
-    # Analisa posts ainda sem sentimento
     posts_to_analyze = all_posts[:50] if all_posts else []
-
     if not posts_to_analyze:
         recent = sb.table("social_posts").select(
             "post_id, content, team_mentioned"
