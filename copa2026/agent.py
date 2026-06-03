@@ -315,14 +315,21 @@ Siga este raciocínio:
 2. Busque o próximo jogo
 3. Busque a artilharia atual
 4. Busque sentimento geral sobre Brasil e Argentina
-5. Gere um resumo diário completo em português com:
-   - Resultado do último jogo
-   - Preview do próximo jogo
-   - Artilharia
-   - Pulso da torcida nas redes
-6. Poste no canal do Telegram
+5. Com TODOS os dados em mãos, gere UMA ÚNICA mensagem completa em português com:
+   ⚽ *Resumo do dia — Copa 2026*
+   - Resultado do último jogo (ou que a Copa ainda não começou)
+   - Preview do próximo jogo com data e horário
+   - Artilharia (ou que ainda não começou)
+   - Pulso da torcida nas redes sociais
+   🤖 Gerado por IA · Copa 2026 AI
+6. Chame postar_telegram UMA ÚNICA VEZ com a mensagem completa
 
-Seja autônomo e decisivo.""",
+Regras importantes:
+- Use quebras de linha entre as seções
+- Use emojis para tornar mais visual
+- Formate em Markdown do Telegram (*negrito*, _itálico_)
+- NUNCA poste mais de uma vez — consolide tudo em um único post
+- Seja autônomo e decisivo.""",
     }
 
     system_prompt = prompts.get(modo, prompts["diario"])
