@@ -120,7 +120,8 @@ def capture_twitter(search_terms: list, pages_per_term: int = 2) -> list:
 
         for t in tweets:
             author   = t.get("author", {})
-            hashtags = [h.lower() for h in t.get("hashtags", [])]
+            # GetXAPI não retorna hashtags separadas — extrai do texto
+            hashtags = [w[1:].lower() for w in t.get("text", "").split() if w.startswith("#")]
 
             post = {
                 "platform":       "twitter",
@@ -162,6 +163,7 @@ def detect_team(text: str) -> Optional[str]:
 
 # ── IA: análise de sentimento ─────────────────────────────────
 def call_ai(prompt: str) -> str:
+    log.info(f"GROQ_KEY presente: {'sim' if GROQ_KEY else 'NAO'}")
     if GROQ_KEY:
         resp = requests.post(
             "https://api.groq.com/openai/v1/chat/completions",
@@ -219,6 +221,7 @@ predicted_winner: time apontado como vencedor (ou null)."""
 
         try:
             resp_text   = call_ai(prompt)
+            log.info(f"Resposta IA (primeiros 300 chars): {resp_text[:300]}")
             json_match  = re.search(r'\[.*?\]', resp_text, re.DOTALL)
             if json_match:
                 batch_results = json.loads(json_match.group())
@@ -315,12 +318,16 @@ def run(analyze_only: bool = False):
         if all_posts:
             save_posts(sb, all_posts)
 
-    posts_to_analyze = all_posts[:50] if all_posts else []
-    if not posts_to_analyze:
+    # Usa posts recém capturados ou busca os últimos 50 do banco
+    if all_posts:
+        posts_to_analyze = all_posts[:50]
+    else:
         recent = sb.table("social_posts").select(
             "post_id, content, team_mentioned"
-        ).limit(50).execute()
+        ).order("captured_at", desc=True).limit(50).execute()
         posts_to_analyze = recent.data or []
+
+    log.info(f"Posts para análise de sentimento: {len(posts_to_analyze)}")
 
     if posts_to_analyze:
         analyses = analyze_sentiment_batch(posts_to_analyze)
