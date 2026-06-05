@@ -1,29 +1,25 @@
 """
-Copa 2026 AI — Agente LangGraph
-Agente autônomo de cobertura de jogos
+Copa 2026 AI — Captura X/Twitter via GetXAPI
+$0.001 por chamada (~20 tweets) — $0.10 grátis no cadastro
+Destino: Supabase
 
-Modos:
-    python agent.py --mode pos_jogo   # cobertura pós-jogo
-    python agent.py --mode pre_jogo   # preview pré-jogo
-    python agent.py --mode diario     # resumo diário com contexto
+Uso:
+    python social_capture.py              # captura + análise
+    python social_capture.py --analyze    # só análise de sentimento
 """
 
 import os
+import re
+import time
 import json
-import logging
 import argparse
-from datetime import datetime, timezone, timedelta
-from typing import TypedDict, Annotated
+import logging
+from datetime import datetime, timezone
+from typing import Optional
 
 import requests
 from supabase import create_client
 from dotenv import load_dotenv
-
-from langchain_groq import ChatGroq
-from langchain_core.tools import tool
-from langchain_core.messages import HumanMessage, SystemMessage
-from langgraph.graph import StateGraph, END
-from langgraph.prebuilt import ToolNode
 
 load_dotenv(override=False)
 
@@ -31,394 +27,316 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s"
 )
-log = logging.getLogger("copa2026-agent")
-
-BRT = timezone(timedelta(hours=-3))
+log = logging.getLogger("copa2026-social")
 
 # ── Config ────────────────────────────────────────────────────
-SUPABASE_URL   = os.getenv("SUPABASE_URL")
-SUPABASE_KEY   = os.getenv("SUPABASE_SERVICE_KEY")
-GROQ_KEY       = os.getenv("GROQ_API_KEY")
-GETXAPI_KEY    = os.getenv("GETXAPI_KEY")
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT  = os.getenv("TELEGRAM_CHANNEL_ID", "@copa2026ai")
+GETXAPI_KEY  = os.getenv("GETXAPI_KEY")
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
+GROQ_KEY     = os.getenv("GROQ_API_KEY")
+GROK_KEY     = os.getenv("GROK_API_KEY")
 
-sb = create_client(SUPABASE_URL, SUPABASE_KEY)
+GETXAPI_BASE = "https://api.getxapi.com"
 
-
-# ══════════════════════════════════════════════════════════════
-# TOOLS — ferramentas que o agente pode usar
-# ══════════════════════════════════════════════════════════════
-
-@tool
-def buscar_ultimo_jogo() -> str:
-    """Busca o último jogo finalizado no banco de dados."""
-    result = (
-        sb.table("matches")
-        .select("*")
-        .eq("status", "FINISHED")
-        .order("utc_date", desc=True)
-        .limit(1)
-        .execute()
-    )
-    if not result.data:
-        return "Nenhum jogo finalizado encontrado."
-
-    j = result.data[0]
-    data = datetime.fromisoformat(j["utc_date"]).astimezone(BRT).strftime("%d/%m às %H:%M")
-    return json.dumps({
-        "match_id":    j["external_id"],
-        "home":        j["home_team_name"],
-        "away":        j["away_team_name"],
-        "placar":      f"{j['home_score']} x {j['away_score']}",
-        "intervalo":   f"{j['home_score_ht']} x {j['away_score_ht']}",
-        "vencedor":    j.get("winner"),
-        "fase":        j.get("stage"),
-        "data":        data,
-    }, ensure_ascii=False)
-
-
-@tool
-def buscar_proximo_jogo(time: str = "") -> str:
-    """Busca o próximo jogo agendado. Opcionalmente filtra por nome do time."""
-    agora = datetime.now(timezone.utc).isoformat()
-    query = (
-        sb.table("matches")
-        .select("*")
-        .eq("status", "TIMED")
-        .gte("utc_date", agora)
-        .order("utc_date")
-        .limit(1)
-    )
-    if time:
-        query = query.or_(
-            f"home_team_name.ilike.%{time}%,away_team_name.ilike.%{time}%"
-        )
-
-    result = query.execute()
-    if not result.data:
-        return "Nenhum jogo agendado encontrado."
-
-    j = result.data[0]
-    data = datetime.fromisoformat(j["utc_date"]).astimezone(BRT).strftime("%d/%m às %H:%M")
-    return json.dumps({
-        "match_id": j["external_id"],
-        "home":     j["home_team_name"],
-        "away":     j["away_team_name"],
-        "data":     data,
-        "fase":     j.get("stage"),
-        "grupo":    j.get("group_name"),
-    }, ensure_ascii=False)
-
-
-@tool
-def buscar_gols_jogo(match_id: int) -> str:
-    """Busca os gols de uma partida específica pelo match_id."""
-    result = (
-        sb.table("goals")
-        .select("*")
-        .eq("match_id", match_id)
-        .order("minute")
-        .execute()
-    )
-    if not result.data:
-        return "Nenhum gol registrado para esse jogo ainda."
-
-    gols = []
-    for g in result.data:
-        tipo = "⚽" if g["type"] == "REGULAR" else ("🥅 (contra)" if g["type"] == "OWN_GOAL" else "⚽ (pênalti)")
-        gols.append(f"{g['minute']}' {tipo} {g['scorer_name']} ({g['team_name']})")
-
-    return "\n".join(gols)
-
-
-@tool
-def buscar_sentimento_times(times: str) -> str:
-    """
-    Busca o sentimento atual no Twitter para uma lista de times.
-    Exemplo: times='Brasil,Argentina'
-    """
-    lista = [t.strip() for t in times.split(",")]
-    resultados = []
-
-    for time in lista:
-        result = (
-            sb.table("team_sentiment")
-            .select("*")
-            .eq("team_name", time)
-            .eq("platform", "twitter")
-            .eq("period", "general")
-            .limit(1)
-            .execute()
-        )
-        # Se não achar exato, tenta parcial via python
-        if not result.data:
-            all_result = sb.table("team_sentiment").select("*").execute()
-            result_data = [r for r in (all_result.data or []) if time.lower() in r["team_name"].lower()]
-            result = type("R", (), {"data": result_data[:1]})()
-        if result.data:
-            r = result.data[0]
-            total = r["total_posts"] or 1
-            pct_pos = round(r["positive_count"] / total * 100)
-            resultados.append(
-                f"{time}: score={r['avg_score']:+.2f} | "
-                f"positivo={pct_pos}% | "
-                f"posts={r['total_posts']}"
-            )
-        else:
-            resultados.append(f"{time}: sem dados de sentimento ainda")
-
-    return "\n".join(resultados)
-
-
-@tool
-def buscar_tweets_recentes(termo: str, limite: int = 10) -> str:
-    """Busca os tweets mais recentes sobre um termo ou time."""
-    result = (
-        sb.table("social_posts")
-        .select("content, likes, shares")
-        .ilike("content", f"%{termo}%")
-        .order("captured_at", desc=True)
-        .limit(limite)
-        .execute()
-    )
-
-    if not result.data:
-        return f"Nenhum tweet encontrado sobre '{termo}'."
-
-    tweets = []
-    for p in result.data:
-        tweets.append(f"- {p['content'][:120]}... (❤️{p.get('likes', 0)})")
-
-    return "\n".join(tweets)
-
-
-@tool
-def buscar_artilharia(limite: int = 5) -> str:
-    """Busca os artilheiros da Copa."""
-    result = (
-        sb.table("top_scorers")
-        .select("*")
-        .order("goals", desc=True)
-        .limit(limite)
-        .execute()
-    )
-
-    if not result.data:
-        return "Artilharia ainda não disponível."
-
-    linhas = []
-    for i, s in enumerate(result.data, 1):
-        linhas.append(f"{i}. {s['player_name']} ({s['team_name']}) — {s['goals']} gols")
-
-    return "\n".join(linhas)
-
-
-@tool
-def postar_telegram(text: str) -> str:
-    """Posta uma mensagem no canal do Telegram. Use este parâmetro: text (string com a mensagem completa). Chame esta função APENAS UMA VEZ e depois encerre."""
-    token = os.getenv("TELEGRAM_BOT_TOKEN")
-    chat  = os.getenv("TELEGRAM_CHANNEL_ID", "@copa2026ai")
-
-    if not token:
-        return "TELEGRAM_BOT_TOKEN não configurado — mensagem não enviada. ENCERRE AGORA."
-
-    resp = requests.post(
-        f"https://api.telegram.org/bot{token}/sendMessage",
-        json={
-            "chat_id":    chat,
-            "text":       text,
-            "parse_mode": "Markdown",
-        },
-        timeout=15,
-    )
-    if resp.ok:
-        log.info("Mensagem postada no Telegram!")
-        return "SUCESSO: Mensagem postada no canal. TAREFA CONCLUÍDA. Não chame mais nenhuma ferramenta."
-    else:
-        log.error(f"Erro Telegram: {resp.text}")
-        return f"ERRO ao postar: {resp.status_code}. ENCERRE AGORA sem tentar novamente."
-
-
-# ══════════════════════════════════════════════════════════════
-# ESTADO DO AGENTE
-# ══════════════════════════════════════════════════════════════
-
-from langgraph.graph.message import add_messages
-
-class AgentState(TypedDict):
-    messages: Annotated[list, add_messages]
-    modo: str
-    log_acoes: list[str]
-
-
-# ══════════════════════════════════════════════════════════════
-# GRAFO DO AGENTE
-# ══════════════════════════════════════════════════════════════
-
-TOOLS = [
-    buscar_ultimo_jogo,
-    buscar_proximo_jogo,
-    buscar_gols_jogo,
-    buscar_sentimento_times,
-    buscar_tweets_recentes,
-    buscar_artilharia,
-    postar_telegram,
+# Termos de busca
+SEARCH_TERMS = [
+    "#Copa2026",
+    "#WorldCup2026",
+    "#WorldCup",
+    "Copa do Mundo 2026",
+    "#FIFAWorldCup",
 ]
 
-def criar_agente(modo: str):
-    """Cria o agente LangGraph com as ferramentas e modo correto."""
+# Palavras-chave por seleção
+TEAM_KEYWORDS = {
+    "Brazil":      ["brazil", "brasil", "seleção", "canarinho", "#bra", "brasileira", "vinicius", "endrick"],
+    "Argentina":   ["argentina", "albiceleste", "#arg", "messi", "scaloni"],
+    "France":      ["france", "frança", "les bleus", "#fra", "mbappé", "mbappe"],
+    "England":     ["england", "inglaterra", "three lions", "#eng", "kane"],
+    "Germany":     ["germany", "alemanha", "mannschaft", "#ger"],
+    "Spain":       ["spain", "espanha", "la roja", "#esp"],
+    "Portugal":    ["portugal", "#por", "ronaldo", "cr7"],
+    "Netherlands": ["netherlands", "holanda", "oranje", "#ned"],
+    "Uruguay":     ["uruguay", "uruguai", "celeste", "#uru"],
+}
 
-    llm = ChatGroq(
-        api_key=GROQ_KEY,
-        model="llama-3.3-70b-versatile",
-        temperature=0.7,
-    ).bind_tools(TOOLS)
 
-    # Prompts por modo
-    prompts = {
-        "pos_jogo": """Você é um agente de IA cobrindo a Copa do Mundo 2026 em tempo real.
-Sua missão: fazer a cobertura do último jogo finalizado COM DADOS REAIS APENAS.
+# ── Supabase ──────────────────────────────────────────────────
+def get_supabase():
+    return create_client(SUPABASE_URL, SUPABASE_KEY)
 
-Siga este raciocínio:
-1. Busque os dados do último jogo finalizado
-2. SE não houver jogo finalizado, encerre SEM postar nada no Telegram
-3. SE houver jogo finalizado, busque os gols da partida
-4. Busque o sentimento dos times no Twitter
-5. Com os dados reais em mãos, gere UMA mensagem em português com:
-   - Placar real do jogo
-   - Gols reais marcados (se disponíveis)
-   - Sentimento da torcida baseado nos dados
-6. Poste no canal do Telegram com emojis e formatação Markdown
 
-REGRAS CRÍTICAS:
-- NUNCA invente resultados, gols ou informações que não vieram das ferramentas
-- NUNCA poste se não houver jogo finalizado
-- Se os dados forem insuficientes, diga claramente o que está disponível
-- NUNCA use frases genéricas como "jogo emocionante" sem ter dados reais
-- Poste UMA ÚNICA VEZ e encerre""",
+# ── GetXAPI ───────────────────────────────────────────────────
+def getxapi_search(query: str, max_pages: int = 2) -> list:
+    """
+    Busca tweets via GetXAPI advanced_search.
+    $0.001 por chamada, ~20 tweets por página.
+    """
+    headers = {"Authorization": f"Bearer {GETXAPI_KEY}"}
+    tweets  = []
+    cursor  = None
 
-        "pre_jogo": """Você é um agente de IA cobrindo a Copa do Mundo 2026.
-Sua missão: fazer o preview do próximo jogo COM DADOS REAIS APENAS.
+    for page in range(max_pages):
+        params = {
+            "q":       f"{query} -filter:retweets",
+            "product": "Latest",
+        }
+        if cursor:
+            params["cursor"] = cursor
 
-Siga este raciocínio:
-1. Busque o próximo jogo agendado
-2. SE não houver próximo jogo, encerre SEM postar nada
-3. Busque o sentimento dos dois times no Twitter
-4. Busque tweets recentes sobre os times
-5. Com os dados reais, gere UMA mensagem em português com:
-   🔮 *Preview — [Time A] x [Time B]*
-   - Data e horário real do jogo
-   - Fase do torneio
-   - O que a torcida está falando (baseado nos tweets reais)
-   - Previsão do agente (deixa claro que é especulação)
-6. Poste UMA ÚNICA VEZ no Telegram e encerre
+        resp = requests.get(
+            f"{GETXAPI_BASE}/twitter/tweet/advanced_search",
+            headers=headers,
+            params=params,
+            timeout=20,
+        )
 
-REGRAS CRÍTICAS:
-- Use apenas dados que vieram das ferramentas
-- NUNCA invente informações táticas ou históricas sem fonte
-- Deixe claro quando algo é previsão vs dado real
-- Poste UMA ÚNICA VEZ e encerre""",
+        if not resp.ok:
+            log.error(f"Erro GetXAPI: {resp.status_code} — {resp.text[:200]}")
+            break
 
-        "diario": """Você é um agente de IA cobrindo a Copa do Mundo 2026.
-Sua missão: fazer um resumo diário completo.
+        data     = resp.json()
+        batch    = data.get("tweets", [])
+        tweets.extend(batch)
+        log.info(f"Página {page+1} — {len(batch)} tweets para '{query[:40]}'")
 
-Siga este raciocínio:
-1. Busque o último jogo finalizado e seus gols
-2. Busque o próximo jogo
-3. Busque a artilharia atual
-4. Busque sentimento geral sobre Brasil e Argentina
-5. Com TODOS os dados em mãos, gere UMA ÚNICA mensagem completa em português com:
-   ⚽ *Resumo do dia — Copa 2026*
-   - Resultado do último jogo (ou que a Copa ainda não começou)
-   - Preview do próximo jogo com data e horário
-   - Artilharia (ou que ainda não começou)
-   - Pulso da torcida nas redes sociais
-   🤖 Gerado por IA · Copa 2026 AI
-6. Chame postar_telegram UMA ÚNICA VEZ com a mensagem completa
+        if not data.get("has_more") or not batch:
+            break
 
-Regras importantes:
-- Use quebras de linha entre as seções
-- Use emojis para tornar mais visual
-- Formate em Markdown do Telegram (*negrito*, _itálico_)
-- NUNCA poste mais de uma vez — consolide tudo em um único post
-- Seja autônomo e decisivo.""",
+        cursor = data.get("next_cursor")
+        time.sleep(0.5)
+
+    return tweets
+
+
+def capture_twitter(search_terms: list, pages_per_term: int = 2) -> list:
+    if not GETXAPI_KEY:
+        raise ValueError("GETXAPI_KEY não definido no .env")
+
+    all_posts = []
+
+    for term in search_terms:
+        tweets = getxapi_search(term, max_pages=pages_per_term)
+
+        for t in tweets:
+            author   = t.get("author", {})
+            # GetXAPI não retorna hashtags separadas — extrai do texto
+            hashtags = [w[1:].lower() for w in t.get("text", "").split() if w.startswith("#")]
+
+            post = {
+                "platform":       "twitter",
+                "post_id":        str(t.get("id", t.get("tweet_id", ""))),
+                "author":         author.get("userName", author.get("name", "")),
+                "author_id":      str(author.get("id", "")),
+                "content":        t.get("text", t.get("full_text", "")),
+                "url":            t.get("url", f"https://x.com/i/web/status/{t.get('id','')}"),
+                "likes":          t.get("likeCount", t.get("favorite_count", 0)) or 0,
+                "comments":       t.get("replyCount", t.get("reply_count", 0)) or 0,
+                "shares":         t.get("retweetCount", t.get("retweet_count", 0)) or 0,
+                "views":          t.get("viewCount", t.get("views", 0)) or 0,
+                "hashtags":       hashtags,
+                "search_term":    term,
+                "language":       t.get("lang", ""),
+                "posted_at":      t.get("createdAt", t.get("created_at")),
+                "team_mentioned": detect_team(t.get("text", t.get("full_text", ""))),
+            }
+
+            if post["post_id"]:
+                all_posts.append(post)
+
+        time.sleep(1)
+
+    log.info(f"Total capturado: {len(all_posts)} posts")
+    return all_posts
+
+
+# ── Detectar seleção ──────────────────────────────────────────
+def detect_team(text: str) -> Optional[str]:
+    if not text:
+        return None
+    text_lower = text.lower()
+    for team, keywords in TEAM_KEYWORDS.items():
+        if any(kw in text_lower for kw in keywords):
+            return team
+    return None
+
+
+# ── IA: análise de sentimento ─────────────────────────────────
+def call_ai(prompt: str) -> str:
+    log.info(f"GROQ_KEY presente: {'sim' if GROQ_KEY else 'NAO'}")
+    if GROQ_KEY:
+        resp = requests.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={"Authorization": f"Bearer {GROQ_KEY}", "Content-Type": "application/json"},
+            json={"model": "llama-3.3-70b-versatile", "max_tokens": 2000, "messages": [{"role": "user", "content": prompt}]},
+            timeout=30,
+        )
+        if resp.ok:
+            return resp.json()["choices"][0]["message"]["content"]
+        log.error(f"Erro Groq: {resp.status_code}")
+
+    if GROK_KEY:
+        resp = requests.post(
+            "https://api.x.ai/v1/chat/completions",
+            headers={"Authorization": f"Bearer {GROK_KEY}", "Content-Type": "application/json"},
+            json={"model": "grok-3-mini", "max_tokens": 2000, "messages": [{"role": "user", "content": prompt}]},
+            timeout=30,
+        )
+        if resp.ok:
+            return resp.json()["choices"][0]["message"]["content"]
+
+    return "[]"
+
+
+def analyze_sentiment_batch(posts: list) -> list:
+    results    = []
+    batch_size = 10
+
+    for i in range(0, len(posts), batch_size):
+        batch = posts[i:i + batch_size]
+        texts = "\n---\n".join([
+            f"POST {j+1}: {p['content'][:250]}"
+            for j, p in enumerate(batch)
+        ])
+
+        prompt = f"""Analise o sentimento dos posts abaixo sobre Copa do Mundo 2026.
+
+{texts}
+
+Retorne APENAS JSON válido (sem texto extra, sem markdown):
+[
+  {{
+    "index": 1,
+    "sentiment": "positive|negative|neutral",
+    "score": 0.0,
+    "emotion": "joy|anger|fear|surprise|sadness|neutral",
+    "is_prediction": true|false,
+    "predicted_winner": "nome do time ou null"
+  }}
+]
+
+score: -1.0 (muito negativo) a 1.0 (muito positivo).
+is_prediction: true se o post prevê resultado de jogo.
+predicted_winner: time apontado como vencedor (ou null)."""
+
+        try:
+            resp_text   = call_ai(prompt)
+            log.info(f"Resposta IA (primeiros 300 chars): {resp_text[:300]}")
+            json_match  = re.search(r'\[.*?\]', resp_text, re.DOTALL)
+            if json_match:
+                batch_results = json.loads(json_match.group())
+                for r in batch_results:
+                    idx = r.get("index", 1) - 1
+                    if 0 <= idx < len(batch):
+                        results.append({
+                            "post_id":          batch[idx]["post_id"],
+                            "sentiment":        r.get("sentiment", "neutral"),
+                            "score":            float(r.get("score", 0)),
+                            "emotion":          r.get("emotion", "neutral"),
+                            "team_mentioned":   batch[idx].get("team_mentioned"),
+                            "is_prediction":    r.get("is_prediction", False),
+                            "predicted_winner": r.get("predicted_winner"),
+                        })
+        except Exception as e:
+            log.error(f"Erro análise batch {i}: {e}")
+
+        time.sleep(3)  # evita rate limit do Groq
+
+    log.info(f"Sentimento analisado: {len(results)} posts")
+    return results
+
+
+# ── Supabase: salvar ──────────────────────────────────────────
+def save_posts(sb, posts: list) -> int:
+    if not posts:
+        return 0
+    unique = list({p["post_id"]: p for p in posts if p.get("post_id")}.values())
+    sb.table("social_posts").upsert(unique, on_conflict="post_id").execute()
+    log.info(f"Posts salvos: {len(unique)}")
+    return len(unique)
+
+
+def save_sentiment(sb, analyses: list) -> int:
+    if not analyses:
+        return 0
+    sb.table("sentiment_analysis").upsert(analyses, on_conflict="post_id").execute()
+    log.info(f"Análises salvas: {len(analyses)}")
+    return len(analyses)
+
+
+def update_team_sentiment(sb):
+    from collections import defaultdict
+
+    result = sb.table("sentiment_analysis").select(
+        "team_mentioned, sentiment, score"
+    ).not_.is_("team_mentioned", "null").execute()
+
+    if not result.data:
+        return
+
+    TEAM_TLA = {
+        "Brazil": "BRA", "Argentina": "ARG", "France": "FRA",
+        "England": "ENG", "Germany": "GER", "Spain": "ESP",
+        "Portugal": "POR", "Netherlands": "NED", "Uruguay": "URU",
     }
 
-    system_prompt = prompts.get(modo, prompts["diario"])
+    teams = defaultdict(lambda: {"positive": 0, "negative": 0, "neutral": 0, "scores": []})
+    for row in result.data:
+        team = row["team_mentioned"]
+        teams[team][row["sentiment"]] += 1
+        if row["score"] is not None:
+            teams[team]["scores"].append(float(row["score"]))
 
-    def agente_node(state: AgentState):
-        log.info(f"Agente pensando... (modo: {state['modo']})")
-        msgs = [SystemMessage(content=system_prompt)] + state["messages"]
-        resposta = llm.invoke(msgs)
-        return {"messages": [resposta]}
+    for team_name, data in teams.items():
+        total = data["positive"] + data["negative"] + data["neutral"]
+        avg   = sum(data["scores"]) / len(data["scores"]) if data["scores"] else 0
+        sb.table("team_sentiment").upsert({
+            "team_name":      team_name,
+            "team_tla":       TEAM_TLA.get(team_name),
+            "platform":       "twitter",
+            "positive_count": data["positive"],
+            "negative_count": data["negative"],
+            "neutral_count":  data["neutral"],
+            "total_posts":    total,
+            "avg_score":      round(avg, 3),
+            "period":         "general",
+            "updated_at":     datetime.now(timezone.utc).isoformat(),
+        }, on_conflict="team_name, platform, period").execute()
 
-    def deve_continuar(state: AgentState):
-        ultima = state["messages"][-1]
-
-        # Verifica se já postou com sucesso — para o loop
-        for msg in reversed(state["messages"]):
-            if hasattr(msg, "content") and isinstance(msg.content, str):
-                if "TAREFA CONCLUÍDA" in msg.content:
-                    log.info("Agente concluiu após postar.")
-                    return END
-
-        if hasattr(ultima, "tool_calls") and ultima.tool_calls:
-            log.info(f"Agente usando tool: {[t['name'] for t in ultima.tool_calls]}")
-            return "tools"
-        log.info("Agente concluiu.")
-        return END
-
-    tool_node = ToolNode(TOOLS)
-
-    grafo = StateGraph(AgentState)
-    grafo.add_node("agente", agente_node)
-    grafo.add_node("tools", tool_node)
-    grafo.set_entry_point("agente")
-    grafo.add_conditional_edges("agente", deve_continuar)
-    grafo.add_edge("tools", "agente")
-
-    return grafo.compile(checkpointer=None)
+    log.info(f"Sentimento por time atualizado: {len(teams)} times")
 
 
-# ══════════════════════════════════════════════════════════════
-# MAIN
-# ══════════════════════════════════════════════════════════════
+# ── Main ──────────────────────────────────────────────────────
+def run(analyze_only: bool = False):
+    sb = get_supabase()
+    log.info("Conexão Supabase OK")
 
-def run(modo: str):
-    log.info(f"Iniciando agente Copa 2026 — modo: {modo}")
+    all_posts = []
 
-    agente = criar_agente(modo)
+    if not analyze_only:
+        all_posts = capture_twitter(SEARCH_TERMS, pages_per_term=2)
+        if all_posts:
+            save_posts(sb, all_posts)
 
-    mensagens_iniciais = {
-        "pos_jogo": "Faça a cobertura completa do último jogo da Copa 2026.",
-        "pre_jogo": "Faça o preview do próximo jogo da Copa 2026.",
-        "diario":   "Faça o resumo diário da Copa 2026 com os últimos resultados e próximos jogos.",
-    }
+    # Usa posts recém capturados ou busca os últimos 50 do banco
+    if all_posts:
+        posts_to_analyze = all_posts[:50]
+    else:
+        recent = sb.table("social_posts").select(
+            "post_id, content, team_mentioned"
+        ).order("captured_at", desc=True).limit(50).execute()
+        posts_to_analyze = recent.data or []
 
-    input_msg = mensagens_iniciais.get(modo, mensagens_iniciais["diario"])
+    log.info(f"Posts para análise de sentimento: {len(posts_to_analyze)}")
 
-    resultado = agente.invoke(
-        {
-            "messages":   [HumanMessage(content=input_msg)],
-            "modo":       modo,
-            "log_acoes":  [],
-        },
-        config={"recursion_limit": 15}
-    )
-
-    ultima_msg = resultado["messages"][-1]
-    log.info(f"Agente finalizou. Última mensagem: {ultima_msg.content[:200]}")
+    if posts_to_analyze:
+        analyses = analyze_sentiment_batch(posts_to_analyze)
+        save_sentiment(sb, analyses)
+        update_team_sentiment(sb)
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Agente Copa 2026")
-    parser.add_argument(
-        "--mode",
-        type=str,
-        default="diario",
-        choices=["pos_jogo", "pre_jogo", "diario"],
-        help="Modo do agente"
-    )
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--analyze", action="store_true")
     args = parser.parse_args()
-    run(modo=args.mode)
+    run(analyze_only=args.analyze)
