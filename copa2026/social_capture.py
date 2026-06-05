@@ -240,7 +240,7 @@ predicted_winner: time apontado como vencedor (ou null)."""
         except Exception as e:
             log.error(f"Erro análise batch {i}: {e}")
 
-        time.sleep(1)
+        time.sleep(3)  # evita rate limit do Groq
 
     log.info(f"Sentimento analisado: {len(results)} posts")
     return results
@@ -301,7 +301,7 @@ def update_team_sentiment(sb):
             "avg_score":      round(avg, 3),
             "period":         "general",
             "updated_at":     datetime.now(timezone.utc).isoformat(),
-        }, on_conflict="team_name, platform, period, match_id").execute()
+        }, on_conflict="team_name, platform, period").execute()
 
     log.info(f"Sentimento por time atualizado: {len(teams)} times")
 
