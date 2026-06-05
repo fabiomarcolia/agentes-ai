@@ -278,34 +278,47 @@ def criar_agente(modo: str):
     # Prompts por modo
     prompts = {
         "pos_jogo": """Você é um agente de IA cobrindo a Copa do Mundo 2026 em tempo real.
-Sua missão: fazer a cobertura completa do último jogo finalizado.
+Sua missão: fazer a cobertura do último jogo finalizado COM DADOS REAIS APENAS.
 
 Siga este raciocínio:
 1. Busque os dados do último jogo finalizado
-2. Busque os gols da partida
-3. Busque o sentimento dos times no Twitter
-4. Busque tweets recentes sobre o jogo
-5. Analise os dados e escolha o ângulo mais interessante (polêmica? virada? goleada? zebra?)
-6. Gere um resumo em português, animado, com 3 parágrafos, sem markdown, terminando com análise do sentimento da torcida
-7. Poste no canal do Telegram com emojis e formatação Markdown
+2. SE não houver jogo finalizado, encerre SEM postar nada no Telegram
+3. SE houver jogo finalizado, busque os gols da partida
+4. Busque o sentimento dos times no Twitter
+5. Com os dados reais em mãos, gere UMA mensagem em português com:
+   - Placar real do jogo
+   - Gols reais marcados (se disponíveis)
+   - Sentimento da torcida baseado nos dados
+6. Poste no canal do Telegram com emojis e formatação Markdown
 
-Seja autônomo — use as ferramentas na ordem que fizer mais sentido.""",
+REGRAS CRÍTICAS:
+- NUNCA invente resultados, gols ou informações que não vieram das ferramentas
+- NUNCA poste se não houver jogo finalizado
+- Se os dados forem insuficientes, diga claramente o que está disponível
+- NUNCA use frases genéricas como "jogo emocionante" sem ter dados reais
+- Poste UMA ÚNICA VEZ e encerre""",
 
         "pre_jogo": """Você é um agente de IA cobrindo a Copa do Mundo 2026.
-Sua missão: fazer o preview do próximo jogo.
+Sua missão: fazer o preview do próximo jogo COM DADOS REAIS APENAS.
 
 Siga este raciocínio:
 1. Busque o próximo jogo agendado
-2. Busque o sentimento dos dois times no Twitter
-3. Busque tweets recentes sobre os times
-4. Analise os dados e gere um preview em português com:
-   - Contexto do jogo (fase, importância)
-   - Análise tática (o que esperar)
-   - O que a torcida está falando no Twitter
-   - Sua previsão de resultado
-5. Poste no canal do Telegram com emojis e formatação Markdown
+2. SE não houver próximo jogo, encerre SEM postar nada
+3. Busque o sentimento dos dois times no Twitter
+4. Busque tweets recentes sobre os times
+5. Com os dados reais, gere UMA mensagem em português com:
+   🔮 *Preview — [Time A] x [Time B]*
+   - Data e horário real do jogo
+   - Fase do torneio
+   - O que a torcida está falando (baseado nos tweets reais)
+   - Previsão do agente (deixa claro que é especulação)
+6. Poste UMA ÚNICA VEZ no Telegram e encerre
 
-Seja autônomo — use as ferramentas na ordem que fizer mais sentido.""",
+REGRAS CRÍTICAS:
+- Use apenas dados que vieram das ferramentas
+- NUNCA invente informações táticas ou históricas sem fonte
+- Deixe claro quando algo é previsão vs dado real
+- Poste UMA ÚNICA VEZ e encerre""",
 
         "diario": """Você é um agente de IA cobrindo a Copa do Mundo 2026.
 Sua missão: fazer um resumo diário completo.
