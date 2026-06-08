@@ -2,18 +2,19 @@ name: ⚽ Copa 2026 — Ingestão de Dados
 
 on:
   schedule:
-    # ── Fase de grupo: jogos de 11 jun a 2 jul (horário BRT = UTC-3)
-    # Durante o dia de jogo: a cada 5 min entre 11h e 23h UTC (8h-20h BRT)
-    - cron: '*/5 14-23 * * *'   # 11h–20h BRT em dias de jogo (ajuste conforme tabela)
+    # Durante jogos: a cada 5 min entre 14h-23h UTC (11h-20h BRT)
+    - cron: '*/5 14-23 * * *'
 
-    # Fora de jogos: 1x por hora para manter dados frescos
+    # Escalações: a cada 30 min — captura 1h antes do jogo
+    - cron: '*/30 * * * *'
+
+    # Fora de jogos: 1x por hora
     - cron: '0 * * * *'
 
-  # Botão manual no GitHub — útil para testar e forçar atualização
   workflow_dispatch:
     inputs:
       only:
-        description: 'Rodar só uma tarefa (deixe vazio para tudo)'
+        description: 'Rodar só uma tarefa'
         required: false
         default: ''
         type: choice
@@ -22,6 +23,7 @@ on:
           - teams
           - matches
           - scorers
+          - lineups
 
 jobs:
   ingest:
@@ -29,44 +31,47 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
-    steps:
-      - name: 📥 Checkout do repositório
-        uses: actions/checkout@v4
+    env:
+      FOOTBALL_DATA_API_KEY: ${{ secrets.FOOTBALL_DATA_API_KEY }}
+      SUPABASE_URL:          ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_KEY:  ${{ secrets.SUPABASE_SERVICE_KEY }}
+      TELEGRAM_BOT_TOKEN:    ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHANNEL_ID:   ${{ secrets.TELEGRAM_CHANNEL_ID }}
 
-      - name: 🐍 Setup Python 3.11
-        uses: actions/setup-python@v5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: 'pip'
 
-      - name: 📦 Instalar dependências
-        run: pip install requests supabase python-dotenv
+      - run: pip install -r copa2026/requirements.txt
 
-      - name: ⚽ Rodar ingestão
+      - name: ⚽ Partidas + gols + artilharia
+        if: github.event.schedule == '*/5 14-23 * * *' || github.event.schedule == '0 * * * *' || github.event.inputs.only == '' || github.event.inputs.only == 'matches' || github.event.inputs.only == 'scorers'
         run: |
           if [ -n "${{ github.event.inputs.only }}" ]; then
             python copa2026/ingest.py --only ${{ github.event.inputs.only }}
           else
-            python copa2026/ingest.py
+            python copa2026/ingest.py --only matches
+            python copa2026/ingest.py --only scorers
           fi
-        env:
-          FOOTBALL_DATA_API_KEY: ${{ secrets.FOOTBALL_DATA_API_KEY }}
-          SUPABASE_URL:          ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_KEY:  ${{ secrets.SUPABASE_SERVICE_KEY }}
 
-      - name: ✅ Confirmar execução
+      - name: 👕 Escalações (a cada 30 min)
+        if: github.event.schedule == '*/30 * * * *' || github.event.inputs.only == 'lineups'
+        run: python copa2026/ingest.py --only lineups
+
+      - name: ✅ Concluído
         if: success()
         run: echo "Ingestão concluída em $(date -u '+%Y-%m-%d %H:%M UTC')"
 
-      - name: ❌ Notificar falha (opcional — requer TELEGRAM_BOT_TOKEN)
+      - name: ❌ Notificar falha
         if: failure()
         run: |
           if [ -n "$TELEGRAM_BOT_TOKEN" ]; then
             curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-              -d chat_id="${TELEGRAM_CHAT_ID}" \
+              -d chat_id="${TELEGRAM_CHANNEL_ID}" \
               -d text="⚠️ *Copa 2026 Agent*: falha na ingestão em $(date -u '+%H:%M UTC')" \
               -d parse_mode=Markdown
           fi
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
