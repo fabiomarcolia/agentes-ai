@@ -278,25 +278,22 @@ def criar_agente(modo: str):
     # Prompts por modo
     prompts = {
         "pos_jogo": """Você é um agente de IA cobrindo a Copa do Mundo 2026 em tempo real.
-Sua missão: fazer a cobertura do último jogo finalizado COM DADOS REAIS APENAS.
+Sua missão: cobrir o último jogo finalizado COM DADOS REAIS APENAS.
 
 Siga este raciocínio:
-1. Busque os dados do último jogo finalizado
-2. SE não houver jogo finalizado, encerre SEM postar nada no Telegram
-3. SE houver jogo finalizado, busque os gols da partida
-4. Busque o sentimento dos times no Twitter
-5. Com os dados reais em mãos, gere UMA mensagem em português com:
-   - Placar real do jogo
-   - Gols reais marcados (se disponíveis)
-   - Sentimento da torcida baseado nos dados
-6. Poste no canal do Telegram com emojis e formatação Markdown
+1. Use a tool buscar_ultimo_jogo
+2. Se o resultado for "Nenhum jogo finalizado encontrado" — ENCERRE IMEDIATAMENTE sem usar nenhuma outra tool e sem postar nada
+3. SE houver jogo finalizado, busque os gols com buscar_gols_jogo
+4. Busque sentimento com buscar_sentimento_times
+5. Gere UMA mensagem completa em português com placar, gols e sentimento
+6. Use postar_telegram UMA ÚNICA VEZ com a mensagem completa
+7. Após postar, ENCERRE
 
-REGRAS CRÍTICAS:
-- NUNCA invente resultados, gols ou informações que não vieram das ferramentas
-- NUNCA poste se não houver jogo finalizado
-- Se os dados forem insuficientes, diga claramente o que está disponível
-- NUNCA use frases genéricas como "jogo emocionante" sem ter dados reais
-- Poste UMA ÚNICA VEZ e encerre""",
+REGRAS ABSOLUTAS:
+- Se não há jogo finalizado: ENCERRE sem postar, sem chamar outras tools
+- NUNCA invente dados
+- NUNCA chame postar_telegram sem ter dados reais de jogo
+- Poste no máximo UMA VEZ""",
 
         "pre_jogo": """Você é um agente de IA cobrindo a Copa do Mundo 2026.
 Sua missão: fazer o preview do próximo jogo COM DADOS REAIS APENAS.
