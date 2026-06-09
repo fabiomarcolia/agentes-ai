@@ -290,7 +290,10 @@ def update_team_sentiment(sb):
     for team_name, data in teams.items():
         total = data["positive"] + data["negative"] + data["neutral"]
         avg   = sum(data["scores"]) / len(data["scores"]) if data["scores"] else 0
-        sb.table("team_sentiment").upsert({
+        # Verifica se já existe registro para esse time
+        existing = sb.table("team_sentiment").select("id").eq("team_name", team_name).eq("platform", "twitter").eq("period", "general").is_("match_id", "null").execute()
+        
+        row = {
             "team_name":      team_name,
             "team_tla":       TEAM_TLA.get(team_name),
             "platform":       "twitter",
@@ -301,7 +304,12 @@ def update_team_sentiment(sb):
             "avg_score":      round(avg, 3),
             "period":         "general",
             "updated_at":     datetime.now(timezone.utc).isoformat(),
-        }, on_conflict="team_name, platform, period").execute()
+        }
+        
+        if existing.data:
+            sb.table("team_sentiment").update(row).eq("id", existing.data[0]["id"]).execute()
+        else:
+            sb.table("team_sentiment").insert(row).execute()
 
     log.info(f"Sentimento por time atualizado: {len(teams)} times")
 
