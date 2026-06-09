@@ -16,6 +16,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Optional
 
+import time
 import requests
 from supabase import create_client, Client
 from dotenv import load_dotenv
@@ -229,6 +230,7 @@ def run(only: Optional[str] = None):
         "teams":   (ingest_teams,   "teams"),
         "matches": (ingest_matches, "matches"),
         "scorers": (ingest_scorers, "scorers"),
+        "lineups": (ingest_lineups, "lineups"),
     }
 
     # Se --only foi passado, roda só aquele
@@ -249,7 +251,82 @@ def run(only: Optional[str] = None):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Ingestão Copa 2026 → Supabase")
-    parser.add_argument("--only", type=str, help="Rodar só uma tarefa: teams | matches | scorers")
+    parser.add_argument("--only", type=str, help="Rodar só uma tarefa: teams | matches | scorers | lineups")
     args = parser.parse_args()
 
     run(only=args.only)
+
+
+# ── Ingestão: Escalações ─────────────────────────────────────
+def ingest_lineups(sb: Client) -> int:
+    """Captura escalações dos jogos finalizados ou em andamento."""
+    result = (
+        sb.table("matches")
+        .select("external_id")
+        .in_("status", ["FINISHED", "IN_PLAY"])
+        .execute()
+    )
+
+    if not result.data:
+        log.info("Nenhum jogo finalizado para buscar escalações.")
+        return 0
+
+    total = 0
+    for match in result.data:
+        match_id = match["external_id"]
+        try:
+            data = api_get(f"/matches/{match_id}")
+            home_lineup = data.get("homeTeam", {})
+            away_lineup = data.get("awayTeam", {})
+
+            rows = []
+            for team_data in [home_lineup, away_lineup]:
+                team_id   = team_data.get("id")
+                team_name = team_data.get("name")
+                formation = team_data.get("formation")
+                coach     = team_data.get("coach", {}).get("name")
+
+                for p in team_data.get("startXI", []):
+                    player = p.get("player", {})
+                    rows.append({
+                        "match_id":     match_id,
+                        "team_id":      team_id,
+                        "team_name":    team_name,
+                        "formation":    formation,
+                        "player_id":    player.get("id"),
+                        "player_name":  player.get("name"),
+                        "shirt_number": player.get("shirtNumber"),
+                        "position":     player.get("position"),
+                        "is_starter":   True,
+                        "coach_name":   coach,
+                    })
+
+                for p in team_data.get("substitutes", []):
+                    player = p.get("player", {})
+                    rows.append({
+                        "match_id":     match_id,
+                        "team_id":      team_id,
+                        "team_name":    team_name,
+                        "formation":    formation,
+                        "player_id":    player.get("id"),
+                        "player_name":  player.get("name"),
+                        "shirt_number": player.get("shirtNumber"),
+                        "position":     player.get("position"),
+                        "is_starter":   False,
+                        "coach_name":   coach,
+                    })
+
+            if rows:
+                sb.table("lineups").upsert(
+                    rows, on_conflict="match_id, team_id, player_id"
+                ).execute()
+                total += len(rows)
+                log.info(f"Escalação do jogo {match_id} salva: {len(rows)} jogadores")
+
+            time.sleep(1)  # respeitar rate limit
+
+        except Exception as e:
+            log.warning(f"Erro ao buscar escalação do jogo {match_id}: {e}")
+
+    log.info(f"Total escalações upserted: {total}")
+    return total
