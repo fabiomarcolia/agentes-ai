@@ -219,45 +219,7 @@ def log_ingest(sb: Client, source: str, status: str, count: int, error: Optional
 
 
 # ── Main ──────────────────────────────────────────────────────
-def run(only: Optional[str] = None):
-    if not FOOTBALL_API_KEY:
-        raise ValueError("FOOTBALL_DATA_API_KEY não definido no .env")
 
-    sb = get_supabase()
-    log.info("Conexão com Supabase OK")
-
-    tasks = {
-        "teams":   (ingest_teams,   "teams"),
-        "matches": (ingest_matches, "matches"),
-        "scorers": (ingest_scorers, "scorers"),
-        "lineups": (ingest_lineups, "lineups"),
-    }
-
-    # Se --only foi passado, roda só aquele
-    if only:
-        tasks = {k: v for k, v in tasks.items() if k == only}
-        if not tasks:
-            log.error(f"Opção inválida: {only}. Use: teams, matches, scorers")
-            sys.exit(1)
-
-    for task_name, (func, log_source) in tasks.items():
-        try:
-            count = func(sb)
-            log_ingest(sb, log_source, "success", count)
-        except Exception as e:
-            log.error(f"Erro em {task_name}: {e}")
-            log_ingest(sb, log_source, "error", 0, str(e))
-
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Ingestão Copa 2026 → Supabase")
-    parser.add_argument("--only", type=str, help="Rodar só uma tarefa: teams | matches | scorers | lineups")
-    args = parser.parse_args()
-
-    run(only=args.only)
-
-
-# ── Ingestão: Escalações ─────────────────────────────────────
 def ingest_lineups(sb: Client) -> int:
     """Captura escalações dos jogos finalizados ou em andamento."""
     result = (
@@ -330,3 +292,42 @@ def ingest_lineups(sb: Client) -> int:
 
     log.info(f"Total escalações upserted: {total}")
     return total
+def run(only: Optional[str] = None):
+    if not FOOTBALL_API_KEY:
+        raise ValueError("FOOTBALL_DATA_API_KEY não definido no .env")
+
+    sb = get_supabase()
+    log.info("Conexão com Supabase OK")
+
+    tasks = {
+        "teams":   (ingest_teams,   "teams"),
+        "matches": (ingest_matches, "matches"),
+        "scorers": (ingest_scorers, "scorers"),
+        "lineups": (ingest_lineups, "lineups"),
+    }
+
+    # Se --only foi passado, roda só aquele
+    if only:
+        tasks = {k: v for k, v in tasks.items() if k == only}
+        if not tasks:
+            log.error(f"Opção inválida: {only}. Use: teams, matches, scorers")
+            sys.exit(1)
+
+    for task_name, (func, log_source) in tasks.items():
+        try:
+            count = func(sb)
+            log_ingest(sb, log_source, "success", count)
+        except Exception as e:
+            log.error(f"Erro em {task_name}: {e}")
+            log_ingest(sb, log_source, "error", 0, str(e))
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Ingestão Copa 2026 → Supabase")
+    parser.add_argument("--only", type=str, help="Rodar só uma tarefa: teams | matches | scorers | lineups")
+    args = parser.parse_args()
+
+    run(only=args.only)
+
+
+# ── Ingestão: Escalações ─────────────────────────────────────
