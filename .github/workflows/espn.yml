@@ -1,0 +1,37 @@
+name: ⚽ Copa 2026 — Gols ESPN
+
+on:
+  schedule:
+    # A cada 5 min durante horário de jogos (14h-23h UTC)
+    - cron: '*/5 14-23 * * *'
+    # A cada 30 min fora de jogos
+    - cron: '*/30 * * * *'
+
+  workflow_dispatch: {}
+
+jobs:
+  ingest_espn:
+    name: Gols ESPN → Supabase
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    env:
+      SUPABASE_URL:         ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - run: pip install -r copa2026/requirements.txt
+
+      - name: ⚽ Ingestão gols via ESPN
+        run: python copa2026/ingest_espn.py
+
+      - name: ✅ Concluído
+        if: success()
+        run: echo "Gols ESPN atualizados em $(date -u '+%Y-%m-%d %H:%M UTC')"
